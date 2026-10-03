@@ -44,6 +44,15 @@ The Wii build uses devkitPPC/libogc and a native GX rendering path. The Homebrew
 apps/OptiCraft/
 ```
 
+### TI-Nspire
+
+The TI-Nspire build targets the CX / CX II under Ndless. There is no GPU or FPU, so rendering is done in software through nGL (320x240, RGB565) and the game runs at a few frames per second at best. Sound and networking are disabled. The program and its data live side by side in any folder on the calculator:
+
+```text
+opticraft.tns
+assets.pak.tns
+```
+
 ## Source layout
 
 ```text
@@ -55,6 +64,7 @@ src/
   pc/           Desktop-specific implementation
   ps2/          PlayStation 2 implementation
   wii/          Nintendo Wii implementation
+  nspire/       TI-Nspire implementation
   util/         Shared utility code
 
 cmake/          Toolchains, source selection, and platform build logic
@@ -115,6 +125,17 @@ cmake --build --preset wii-release
 ```
 
 Use `wii-debug` for a debug build and `wii-bringup` for the minimal hardware/toolchain bring-up target.
+
+### TI-Nspire
+
+Requires the Ndless SDK; set `NDLESS_SDK` to its `ndless-sdk` directory.
+
+```text
+cmake --preset nspire-release
+cmake --build --preset nspire-release
+```
+
+The output is `bin/nspire/opticraft.tns`. `nspire-hostsim` builds the same port for the host as a headless simulator (frames are written as PPM, the keypad is driven from a script); see `src/nspire/NspireSystem_hostsim.cpp`.
 
 ## Development notes
 
