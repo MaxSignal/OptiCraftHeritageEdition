@@ -1,6 +1,7 @@
 #pragma once
 
 #include <thread>
+#include "platform/StdThread.h"
 
 class CanvasIsomPreview;
 
@@ -16,5 +17,5 @@ public:
 
 private:
 	CanvasIsomPreview *isoCanvas;
-	std::thread worker;
+	PlatformStdThread worker;
 };

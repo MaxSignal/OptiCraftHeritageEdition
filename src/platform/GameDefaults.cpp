@@ -38,13 +38,13 @@ const PlatformGameDefaults& platformGameDefaults()
 #else
         d.limitFramerate = 2;
 #endif
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
         d.viewBobbing = true;
 #else
         d.viewBobbing = false;
 #endif
         d.fogOff = PLATFORM_PS2 != 0;
-        d.brightness = (PLATFORM_PS2 || PLATFORM_WII) ? 1.0f : 0.0f;
+        d.brightness = (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE) ? 1.0f : 0.0f;
         d.aoLevel = 0.0f;
 #if PLATFORM_PC_LEGACY
         d.smoothFps = false;
@@ -57,7 +57,7 @@ const PlatformGameDefaults& platformGameDefaults()
         d.sky = false;
         d.sunMoon = false;
         d.clouds = 3;
-#elif PLATFORM_PS2 || PLATFORM_WII
+#elif PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
         d.clouds = 3;
 #else
         d.clouds = 1;

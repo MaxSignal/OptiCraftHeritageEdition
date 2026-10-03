@@ -9,6 +9,7 @@
 #include "ThreadDownloadImageData.h"
 #include "java/JavaNetwork.h"
 #include "java/BufferedImage.h"
+#include "platform/StdThread.h"
 
 ThreadDownloadImage::ThreadDownloadImage(ThreadDownloadImageData *threaddownloadimagedata, const std::string &s, ImageBuffer *imagebuffer)
 	: location(s)
@@ -33,7 +34,7 @@ void ThreadDownloadImage::start()
 	// which is an ENOSYS stub in devkitPPC.
 	run();
 #else
-	worker = std::thread(&ThreadDownloadImage::run, this);
+	worker = PlatformStdThread(&ThreadDownloadImage::run, this);
 #endif
 }
 

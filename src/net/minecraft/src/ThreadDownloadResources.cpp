@@ -24,6 +24,7 @@
 
 #include "java/JavaNetwork.h"
 #include "java/String.h"
+#include "platform/StdThread.h"
 namespace fs = std::filesystem;
 #endif
 
@@ -64,7 +65,7 @@ void ThreadDownloadResources::start()
 	run();
 	MC_LOG_DEBUG("audio", "resource scan: %d files under %s\n", s_localResourceCount, resourcesFolder.c_str());
 #else
-	worker = std::thread(&ThreadDownloadResources::run, this);
+	worker = PlatformStdThread(&ThreadDownloadResources::run, this);
 #endif
 }
 

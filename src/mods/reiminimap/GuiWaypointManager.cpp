@@ -153,7 +153,7 @@ void GuiWaypointManager::handleSpecializedMenuInput()
 
 void GuiWaypointManager::keyTyped(char_t c, int_t key)
 {
-#if !PLATFORM_PS2 && !PLATFORM_WII
+#if !PLATFORM_PS2 && !PLATFORM_WII && !PLATFORM_NSPIRE
     const size_t totalWaypoints = ReiMinimap::getInstance().getWaypointCount();
     if (key == lwjgl::Keyboard::KEY_UP)
     {

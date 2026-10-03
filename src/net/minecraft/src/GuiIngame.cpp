@@ -10,7 +10,7 @@
 #include "EntityPlayerSP.h"
 #include "GuiPlayerInfo.h"
 #include "NetClientHandler.h"
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 #include "NetworkManager.h"
 #endif
 #include "EntityClientPlayerMP.h"
@@ -269,7 +269,7 @@ void GuiIngame::renderFpsOverlay(FontRenderer *fontRenderer)
 	// [FIX WII / ISSUE #9] Margen de seguridad para televisores (Title Safe Area).
 	// En televisores analógicos, CRT o convertidores HDMI que aplican overscan, las coordenadas (2, 2)
 	// quedan tapadas por el borde físico de la pantalla. Añadimos un margen seguro de 12px en consolas.
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	constexpr int_t safeX = 12;
 	constexpr int_t safeY = 12;
 #else
@@ -355,7 +355,7 @@ void GuiIngame::renderDebugOverlay(FontRenderer *fontRenderer, int_t screenWidth
 	drawString(fontRenderer, "y: " + std::to_string(mc->thePlayer->posY), safeLeft, safeTop + 70, 0xe0e0e0);
 	drawString(fontRenderer, "z: " + std::to_string(mc->thePlayer->posZ), safeLeft, safeTop + 78, 0xe0e0e0);
 	drawString(fontRenderer, "f: " + std::to_string(MathHelper::floor_float((mc->thePlayer->rotationYaw * 4.0f) / 360.0f + 0.5f) & 3), safeLeft, safeTop + 86, 0xe0e0e0);
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	drawString(fontRenderer, platformInputDebugLine(), safeLeft, safeTop + 94, 0xe0e0e0);
 	WorldClient *multiplayerWorld = dynamic_cast<WorldClient *>(mc->theWorld);
 	if (multiplayerWorld != nullptr)

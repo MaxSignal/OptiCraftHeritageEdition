@@ -4,6 +4,7 @@
 #include <iostream>
 
 #include "StatsSyncher.h"
+#include "platform/StdThread.h"
 
 ThreadStatSyncherReceive::ThreadStatSyncherReceive(StatsSyncher *statssyncher)
 	: field_27231_a(statssyncher)
@@ -18,7 +19,7 @@ ThreadStatSyncherReceive::~ThreadStatSyncherReceive()
 
 void ThreadStatSyncherReceive::start()
 {
-	worker = std::thread(&ThreadStatSyncherReceive::run, this);
+	worker = PlatformStdThread(&ThreadStatSyncherReceive::run, this);
 	worker.detach();
 }
 

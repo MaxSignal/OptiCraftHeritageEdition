@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include "platform/StdThread.h"
 
 class Minecraft;
 
@@ -21,5 +22,5 @@ private:
     std::atomic_bool stopping;
     std::mutex mutex;
     std::condition_variable condition;
-    std::thread worker;
+    PlatformStdThread worker;
 };

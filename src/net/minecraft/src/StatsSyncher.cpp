@@ -9,6 +9,7 @@
 #include "StatFileWriter.h"
 #include "StatBase.h"
 #include "java/String.h"
+#include "platform/StdThread.h"
 
 StatsSyncher::StatsSyncher(Session *session, StatFileWriter *statfilewriter, const std::string &file) :
 	isBusy(false),
@@ -105,7 +106,7 @@ void StatsSyncher::syncFromServer()
 	isBusy = true;
 	if (worker.joinable())
 		worker.join();
-	worker = std::thread([this]()
+	worker = PlatformStdThread([this]()
 	{
 		try { receiveStats(); }
 		catch (const std::exception &exception)
@@ -125,7 +126,7 @@ void StatsSyncher::syncToServer(std::map<StatBase*, int_t> &map)
 	if (worker.joinable())
 		worker.join();
 	auto pending = map;
-	worker = std::thread([this, pending = std::move(pending)]() mutable
+	worker = PlatformStdThread([this, pending = std::move(pending)]() mutable
 	{
 		try { sendStats(std::move(pending)); }
 		catch (const std::exception &exception)

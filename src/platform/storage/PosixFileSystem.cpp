@@ -1,4 +1,4 @@
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 
 #include "platform/storage/PosixFileSystem.h"
 #include "platform/storage/PathUtils.h"
@@ -92,7 +92,12 @@ std::int64_t lastModifiedMs(const std::string& path)
     struct stat st{};
     if (::stat(path.c_str(), &st) != 0)
         return 0;
+#if defined(_TINSPIRE)
+    // Ndless' nucleus.h #undefs newlib's st_mtime -> st_mtim.tv_sec alias.
+    return static_cast<std::int64_t>(st.st_mtim.tv_sec) * 1000LL;
+#else
     return static_cast<std::int64_t>(st.st_mtime) * 1000LL;
+#endif
 }
 
 std::int64_t fileSize(const std::string& path)

@@ -134,7 +134,7 @@ void LegacyOptionsScreen::updateScreen()
 {
     GuiScreen::updateScreen();
     syncLegacySelection();
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     // A focused GuiTextField gives the virtual keyboard exclusive ownership of
     // these buttons. Do not move or activate the menu underneath the overlay.
     if (platformTextInputExclusive())

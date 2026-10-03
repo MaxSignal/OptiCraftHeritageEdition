@@ -47,6 +47,14 @@ if(NINTENDO_WII OR (DEFINED PLATFORM AND PLATFORM STREQUAL "WII"))
     return()
 endif()
 
+# TI-Nspire build. cmake/nspire_toolchain.cmake (wired in by the nspire-release
+# preset) defines NSPIRE; -DPLATFORM=NSPIRE without it builds the headless host
+# simulator of the same port. See cmake/nspire.cmake.
+if(NSPIRE OR (DEFINED PLATFORM AND PLATFORM STREQUAL "NSPIRE"))
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/nspire.cmake)
+    return()
+endif()
+
 enable_testing()
 
 function(opticraft_add_optional_test target test_source)

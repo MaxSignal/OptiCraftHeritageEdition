@@ -5,8 +5,43 @@
 #include <chrono>
 
 #include "IThreadedFileIO.h"
+#include "platform/PlatformConfig.h"
 
 ThreadedFileIOBase ThreadedFileIOBase::threadedIOInstance;
+
+#if PLATFORM_NO_THREADS
+
+// No worker thread to hand the writes to: a queued task writes everything it
+// has pending before queueIO() returns, so there is never anything to wait for
+// or cancel. Chunk saves become synchronous, which is also what keeps them from
+// piling up in RAM on a 64 MB machine.
+ThreadedFileIOBase::ThreadedFileIOBase() :
+	activeTask(nullptr), writeQueuedCounter(0), savedIOCounter(0), isThreadWaiting(false), stopping(false)
+{
+}
+
+ThreadedFileIOBase::~ThreadedFileIOBase() {}
+
+void ThreadedFileIOBase::run() {}
+void ThreadedFileIOBase::processQueue() {}
+
+void ThreadedFileIOBase::queueIO(IThreadedFileIO *task)
+{
+	if (task == nullptr || task == activeTask)
+		return;
+	++writeQueuedCounter;
+	activeTask = task;
+	while (task->writeNextIO())
+	{
+	}
+	activeTask = nullptr;
+	++savedIOCounter;
+}
+
+void ThreadedFileIOBase::waitForFinish() {}
+void ThreadedFileIOBase::cancelTask(IThreadedFileIO *) {}
+
+#else
 
 ThreadedFileIOBase::ThreadedFileIOBase() :
 	activeTask(nullptr), writeQueuedCounter(0), savedIOCounter(0), isThreadWaiting(false), stopping(false),
@@ -154,3 +189,5 @@ void ThreadedFileIOBase::cancelTask(IThreadedFileIO *task)
 		return stopping || activeTask != task;
 	});
 }
+
+#endif // PLATFORM_NO_THREADS

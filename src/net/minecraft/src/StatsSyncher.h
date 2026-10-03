@@ -8,6 +8,7 @@
 #include <chrono>
 #include <optional>
 #include "java/Type.h"
+#include "platform/StdThread.h"
 
 class Session;
 class StatFileWriter;
@@ -51,5 +52,5 @@ private:
 	Session *session;
 	int_t syncCounter;
 	int_t packetSize;
-	std::thread worker;
+	PlatformStdThread worker;
 };

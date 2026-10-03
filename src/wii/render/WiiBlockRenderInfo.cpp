@@ -1,6 +1,6 @@
 #include "wii/render/WiiBlockRenderInfo.h"
 
-#ifdef WII_PLATFORM
+#if defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 
 #include <array>
 #include <cmath>

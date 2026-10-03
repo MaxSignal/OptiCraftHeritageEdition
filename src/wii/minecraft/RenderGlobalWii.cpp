@@ -1,4 +1,4 @@
-#ifdef WII_PLATFORM
+#if defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 
 #include "net/minecraft/src/RenderGlobal.h"
 

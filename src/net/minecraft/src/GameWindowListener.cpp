@@ -5,8 +5,9 @@
 #include <iostream>
 
 #include "Minecraft.h"
+#include "platform/StdThread.h"
 
-GameWindowListener::GameWindowListener(Minecraft *minecraft, std::thread *thread)
+GameWindowListener::GameWindowListener(Minecraft *minecraft, PlatformStdThread *thread)
     : mc(minecraft), mcThread(thread)
 {
 }

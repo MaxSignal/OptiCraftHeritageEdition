@@ -15,6 +15,7 @@
 #include "platform/Mutex.h"
 
 #include "java/Type.h"
+#include "platform/StdThread.h"
 
 namespace JavaNetwork
 {
@@ -53,8 +54,8 @@ public:
 	static bool sendNetworkPacket(NetworkManager *networkmanager);
 	static bool isTerminating(NetworkManager *networkmanager);
 	static void handleNetworkException(NetworkManager *networkmanager, std::exception &exception);
-	static std::thread *getReadThread(NetworkManager *networkmanager);
-	static std::thread *getWriteThread(NetworkManager *networkmanager);
+	static PlatformStdThread *getReadThread(NetworkManager *networkmanager);
+	static PlatformStdThread *getWriteThread(NetworkManager *networkmanager);
 
 	static std::mutex threadSyncObject;
 	static std::ostream *getSocketOutputStream(NetworkManager *networkmanager);
@@ -73,7 +74,7 @@ private:
 	void readThreadRun();
 	void writeThreadRun();
 	void sleepThread();
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	static void *platformReadThreadEntry(void *argument);
 	static void *platformWriteThreadEntry(void *argument);
 #endif
@@ -81,7 +82,7 @@ private:
 	PlatformMutex sendQueueLock;
 	PlatformMutex readQueueLock;
 	PlatformMutex shutdownLock;
-#if !defined(WII_PLATFORM) && !defined(PS2_PLATFORM)
+#if !defined(WII_PLATFORM) && !defined(PS2_PLATFORM) && !defined(NSPIRE_PLATFORM)
 	std::mutex threadSleepLock;
 	std::condition_variable threadSleepCondition;
 #endif
@@ -99,12 +100,12 @@ private:
 	std::deque<std::unique_ptr<Packet>> chunkDataPackets;
 	NetHandler *netHandler;
 	bool serverHandler;
-	std::thread readThread;
-	std::thread writeThread;
-#if !defined(WII_PLATFORM) && !defined(PS2_PLATFORM)
-	std::thread closeThread;
+	PlatformStdThread readThread;
+	PlatformStdThread writeThread;
+#if !defined(WII_PLATFORM) && !defined(PS2_PLATFORM) && !defined(NSPIRE_PLATFORM)
+	PlatformStdThread closeThread;
 #endif
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	PlatformThread platformReadThread;
 	PlatformThread platformWriteThread;
 #endif

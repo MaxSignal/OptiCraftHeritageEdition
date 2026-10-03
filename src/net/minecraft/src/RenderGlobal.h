@@ -110,15 +110,15 @@ private:
 	void markRenderersForNewPosition(int_t i, int_t j, int_t k);
 #if PLATFORM_CENTER_VERTICAL_RENDERERS
 	void remapCenteredVerticalRendererSlots(int_t newStartSection);
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 	int_t chooseConsoleVerticalStartSection(int_t playerBlockY) const;
 #endif
 #endif
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	void evictWiiMeshCache(EntityLiving *entityliving);
 #endif
 	void enqueueRendererUpdate(WorldRenderer *worldrenderer);
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 	void enqueueRendererUpdatePriority(WorldRenderer *worldrenderer);
 #endif
 	void dequeueRendererUpdate(WorldRenderer *worldrenderer);
@@ -160,7 +160,7 @@ private:
 	// mapping is slot = section - verticalStartSection, not section % renderChunksTall.
 	// markRenderersInRange must use this so block edits dirty the right renderer.
 	int_t verticalStartSection = 0;
-#if (PLATFORM_PS2 || PLATFORM_WII) && PLATFORM_CENTER_VERTICAL_RENDERERS
+#if (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE) && PLATFORM_CENTER_VERTICAL_RENDERERS
 	bool verticalWindowInitialized = false;
 #endif
 #if PLATFORM_PC
@@ -173,7 +173,7 @@ private:
 	bool occlusionEnabled = false;
 #endif
 	int_t cloudOffsetX = 0;
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 	RenderStaticMesh starMesh;
 	RenderStaticMesh skyMesh;
 	RenderStaticMesh skyMesh2;

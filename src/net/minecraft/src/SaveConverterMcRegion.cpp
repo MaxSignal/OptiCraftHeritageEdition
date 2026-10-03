@@ -30,6 +30,13 @@
 #include <windows.h>
 #include <direct.h>
 #define MKDIR(p) _mkdir(p)
+#elif defined(NSPIRE_PLATFORM)
+// Ndless' <dirent.h> pulls in the OS syscall declarations, whose `String`
+// typedef collides with java/String.h; list directories through the storage
+// layer instead (it includes dirent in a TU without game headers).
+#include <sys/stat.h>
+#include "platform/storage/PosixFileSystem.h"
+#define MKDIR(p) mkdir(p, 0755)
 #else
 #include <sys/stat.h>
 #include <dirent.h>
@@ -63,6 +70,12 @@ static std::vector<std::string> listDirectory(const std::string &path)
         } while (FindNextFileA(h, &data));
         FindClose(h);
     }
+#elif defined(NSPIRE_PLATFORM)
+    std::vector<std::string> names;
+    if (PlatformStorage::listEntries(path, names))
+        for (const std::string &name : names)
+            if (name != "." && name != "..")
+                entries.push_back(path + "/" + name);
 #else
     DIR *dir = opendir(path.c_str());
     if (dir)

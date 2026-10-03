@@ -28,7 +28,7 @@ private:
     double viewerZ;
 #if PLATFORM_PC
     std::vector<int_t> displayListIds;
-#elif PLATFORM_WII
+#elif PLATFORM_HANDLE_TERRAIN
     struct TerrainRenderEntry
     {
         WorldRenderer *renderer;

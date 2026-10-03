@@ -5,7 +5,7 @@
 #include "FontRenderer.h"
 #include "SoundManager.h"
 
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 #include "platform/Input.h"
 #endif
 
@@ -63,7 +63,7 @@ void GuiLoadSkinsMenu::keyTyped(char_t c, int_t key)
 
 void GuiLoadSkinsMenu::handleSpecializedMenuInput()
 {
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     const PlatformTextInputSnapshot pad = platformTextInputSnapshot(platformMenuPad());
     if (!pad.connected)
         return;

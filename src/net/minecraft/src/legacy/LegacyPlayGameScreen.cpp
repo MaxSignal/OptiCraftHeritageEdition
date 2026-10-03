@@ -317,7 +317,7 @@ void LegacyPlayGameScreen::updateScreen()
     GuiSelectWorld::updateScreen();
     if (tutorialMessageTicks > 0)
         --tutorialMessageTicks;
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     const PlatformTextInputSnapshot pad = platformTextInputSnapshot(platformMenuPad());
 #if PLATFORM_PS2
     if ((pad.pressed & (PLATFORM_TEXT_CLOSE | PLATFORM_TEXT_SHIFT)) != 0)

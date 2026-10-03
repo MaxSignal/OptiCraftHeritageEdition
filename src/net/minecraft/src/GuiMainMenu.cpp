@@ -166,7 +166,7 @@ void GuiMainMenu::updateScreen()
         return;
 
     syncLegacySelection();
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     const PlatformTextInputSnapshot pad = platformTextInputSnapshot(platformMenuPad());
     if ((pad.pressed & PLATFORM_TEXT_UP) != 0)
         moveLegacySelection(-1);
@@ -258,7 +258,7 @@ void GuiMainMenu::initGui()
     viewportTexture = -1;
     legacyPanoramaAvailable = mc->gameSettings != nullptr && mc->gameSettings->legacyUI &&
         mc->renderEngine != nullptr && mc->renderEngine->hasResource(legacyPanoramaResourcePath());
-#if !PLATFORM_PS2 && !PLATFORM_WII
+#if !PLATFORM_PS2 && !PLATFORM_WII && !PLATFORM_NSPIRE
     if (!legacyPanoramaAvailable)
     {
         BufferedImage viewportImage(256, 256);

@@ -7,6 +7,7 @@
 #include <malloc.h>
 #include <algorithm>
 #include <new>
+#elif defined(NSPIRE_PLATFORM)
 #else
 #include <thread>
 #include <functional>
@@ -194,6 +195,20 @@ std::uintptr_t PlatformThread::currentId()
 {
     return static_cast<std::uintptr_t>(GetThreadId());
 }
+
+#elif defined(NSPIRE_PLATFORM)
+// No threads (see platform/StdThread.h). start() refuses, so callers that can
+// fall back to doing the work inline -- the chunk-generation scheduler is only
+// built with PLATFORM_ASYNC_CHUNK_GENERATION, which the Nspire leaves off --
+// do so, and the single thread is always "current".
+struct PlatformThread::Impl {};
+PlatformThread::PlatformThread() : impl_(nullptr) {}
+PlatformThread::~PlatformThread() {}
+bool PlatformThread::start(Entry, void*, std::size_t, int, std::uintptr_t) { return false; }
+void PlatformThread::join() {}
+bool PlatformThread::joinable() const { return false; }
+bool PlatformThread::isCurrent() const { return false; }
+std::uintptr_t PlatformThread::currentId() { return 1; }
 
 #else
 struct PlatformThread::Impl { std::thread thread; };

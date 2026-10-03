@@ -109,7 +109,7 @@ void LegacyCreateWorldScreen::initGui()
     updateDifficultyControl();
     updateControlVisibility();
     selectControl(0);
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     // Preserve the console's existing initial text-entry behavior. Once the user
     // closes the keyboard, focus stays off until row 0 is activated again.
     textboxWorldName->setFocused(true);
@@ -319,7 +319,7 @@ void LegacyCreateWorldScreen::moveSelection(int_t direction)
 void LegacyCreateWorldScreen::updateScreen()
 {
     GuiCreateWorld::updateScreen();
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     // The virtual keyboard owns the console text-input snapshot while a field is
     // focused. Do not let menu navigation consume the same presses underneath it.
     if (platformTextInputExclusive())

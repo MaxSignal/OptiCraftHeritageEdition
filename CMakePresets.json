@@ -140,6 +140,29 @@
       "cacheVariables": {
         "WII_BRINGUP": "ON"
       }
+    },
+    {
+      "name": "nspire-release",
+      "displayName": "TI-Nspire Release (Ndless / ARM926EJ-S)",
+      "description": "TI-Nspire CX / CX II build via the Ndless SDK and the nGL software renderer. Set NDLESS_SDK to the ndless-sdk directory.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/nspire-release",
+      "toolchainFile": "${sourceDir}/cmake/nspire_toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PLATFORM": "NSPIRE"
+      }
+    },
+    {
+      "name": "nspire-hostsim",
+      "displayName": "TI-Nspire host simulator (headless, desktop compiler)",
+      "description": "The Nspire port built for the host: same platform layer and nGL renderer, frames dumped as PPM, keypad scripted. See src/nspire/NspireSystem_hostsim.cpp.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/nspire-hostsim",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PLATFORM": "NSPIRE"
+      }
     }
   ],
   "buildPresets": [
@@ -201,6 +224,18 @@
       "name": "wii-bringup",
       "displayName": "Build Wii Bring-up",
       "configurePreset": "wii-bringup",
+      "jobs": 0
+    },
+    {
+      "name": "nspire-release",
+      "displayName": "Build TI-Nspire Release",
+      "configurePreset": "nspire-release",
+      "jobs": 0
+    },
+    {
+      "name": "nspire-hostsim",
+      "displayName": "Build TI-Nspire host simulator",
+      "configurePreset": "nspire-hostsim",
       "jobs": 0
     }
   ]

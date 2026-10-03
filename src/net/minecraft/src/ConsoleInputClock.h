@@ -1,9 +1,11 @@
 #pragma once
 
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 
 #if defined(PS2_PLATFORM)
 #include "platform/time.h"
+#elif defined(NSPIRE_PLATFORM)
+#include "nspire/NspireSystem.h"
 #else
 #include <ogc/lwp_watchdog.h>
 #endif
@@ -21,6 +23,8 @@ inline int consoleInputNowMs()
 {
 #if defined(PS2_PLATFORM)
 	return (int)(getTimeS() * 1000.0f);
+#elif defined(NSPIRE_PLATFORM)
+	return (int)NspireSystem::millis();
 #else
 	return (int)ticks_to_millisecs(gettime());
 #endif

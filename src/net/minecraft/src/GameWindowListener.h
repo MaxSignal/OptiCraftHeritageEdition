@@ -1,6 +1,7 @@
 #pragma once
 
 #include <thread>
+#include "platform/StdThread.h"
 
 class Minecraft;
 
@@ -11,10 +12,10 @@ class Minecraft;
 class GameWindowListener
 {
 public:
-    GameWindowListener(Minecraft *minecraft, std::thread *mcThread);
+    GameWindowListener(Minecraft *minecraft, PlatformStdThread *mcThread);
 
     void windowClosing();
 
     Minecraft   *mc;
-    std::thread *mcThread;
+    PlatformStdThread *mcThread;
 };

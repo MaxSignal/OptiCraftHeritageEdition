@@ -3,6 +3,7 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include "platform/StdThread.h"
 
 class NetworkManager;
 
@@ -21,6 +22,6 @@ public:
 
 private:
     std::string threadName;
-    std::thread thread;
+    PlatformStdThread thread;
     std::atomic_bool alive{false};
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <thread>
+#include "platform/StdThread.h"
 
 class StatsSyncher;
 
@@ -16,5 +17,5 @@ public:
 
 private:
 	StatsSyncher *field_27231_a;
-	std::thread worker;
+	PlatformStdThread worker;
 };

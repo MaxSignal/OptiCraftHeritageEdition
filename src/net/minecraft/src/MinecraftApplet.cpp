@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <stdexcept>
+#include "platform/StdThread.h"
 
 MinecraftApplet::MinecraftApplet(int widthValue, int heightValue)
     : width(widthValue),
@@ -80,7 +81,7 @@ void MinecraftApplet::startMainThread()
     if (mc == nullptr || mcThread.joinable())
         return;
 
-    mcThread = std::thread([this]()
+    mcThread = PlatformStdThread([this]()
     {
         if (mc != nullptr)
             mc->run();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <thread>
+#include "platform/StdThread.h"
 
 class NetworkManager;
 
@@ -16,5 +17,5 @@ public:
 
 private:
     NetworkManager *netManager;
-    std::thread worker;
+    PlatformStdThread worker;
 };

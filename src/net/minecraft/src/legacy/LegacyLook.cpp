@@ -35,7 +35,7 @@ const LegacyGammaLut &legacyGammaLut()
 
 bool legacyLookDefaultEnabled()
 {
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
     return true;
 #else
     return false;

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "NetworkManager.h"
+#include "platform/StdThread.h"
 
 ThreadCloseConnection::ThreadCloseConnection(NetworkManager *networkmanager)
 	: field_28109_a(networkmanager)
@@ -20,7 +21,7 @@ ThreadCloseConnection::~ThreadCloseConnection()
 
 void ThreadCloseConnection::start()
 {
-	worker = std::thread(&ThreadCloseConnection::run, this);
+	worker = PlatformStdThread(&ThreadCloseConnection::run, this);
 	worker.detach();
 }
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef WII_PLATFORM
+#if defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 
 #include <vector>
 

@@ -49,7 +49,7 @@ namespace
 {
 	static float rendererAabbMargin()
 	{
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 		// Consoles use a tuned conservative margin because their terrain clip paths
 		// and fixed renderer grids differ from desktop Advanced OpenGL.
 		return PLATFORM_RENDERER_AABB_MARGIN;
@@ -87,10 +87,10 @@ WorldRenderer::WorldRenderer(World *world, std::vector<TileEntity *> *tileEntiti
 #else
 	(void)glListId;
 #endif
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	renderTerrainChunkHandlesCreate(terrainChunkHandles);
 #endif
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	for (int_t p = 0; p < 2; ++p)
 	{
 		wiiBuildVertexCount[p] = 0;
@@ -213,14 +213,14 @@ void WorldRenderer::removeTileEntityRenderersFromGlobalList()
 #ifdef PS2_PLATFORM
 	ps2BuildTileEntityRenderers.clear();
 #endif
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	wiiBuildTileEntityRenderers.clear();
 #endif
 }
 
 void WorldRenderer::cleanup()
 {
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	// Native GX handles are renderer-owned. Any compatibility list block was
 	// allocated lazily by this renderer and is released below after contents are
 	// detached from the active world position.
@@ -252,7 +252,7 @@ void WorldRenderer::cleanup()
 	renderTerrainCacheRelease(ps2TerrainCache);
 #endif
 
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	renderTerrainChunkHandlesDestroy(terrainChunkHandles);
 #endif
 
@@ -333,7 +333,7 @@ void WorldRenderer::updateInFrustrum(ICamera *icamera)
 	const int cls = icamera->classifyBoundingBox(rendererBoundingBox);
 	isInFrustum = (cls != 0);
 	isFullyInFrustum = (cls == 2);
-#elif PLATFORM_WII
+#elif PLATFORM_HANDLE_TERRAIN
 	// GX has no occlusion queries, so the stronger fully-inside classification
 	// is dead work here. A plain frustum test is the complete Wii contract.
 	isInFrustum = icamera->isBoundingBoxInFrustum(rendererBoundingBox);
@@ -355,7 +355,7 @@ void WorldRenderer::updateInFrustrum(ICamera *icamera)
 
 
 
-#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !PLATFORM_PC_LEGACY
+#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(NSPIRE_PLATFORM) && !PLATFORM_PC_LEGACY
 void WorldRenderer::updateRenderer()
 {
 	if (!needsUpdate)
@@ -577,7 +577,7 @@ void WorldRenderer::markDirty()
 	ps2ResetBuildState();
 #endif
 #endif
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 #if PLATFORM_COALESCE_MESH_REBUILDS
 	if (wiiBuildActive)
 	{
@@ -599,7 +599,7 @@ void WorldRenderer::markDirty()
 	needsUpdate = true;
 }
 
-#if WII_PLATFORM || PS2_PLATFORM || PLATFORM_PC_LEGACY
+#if PLATFORM_HANDLE_TERRAIN || PS2_PLATFORM || PLATFORM_PC_LEGACY
 void WorldRenderer::markDirtyFromLighting()
 {
 #if PLATFORM_COALESCE_MESH_REBUILDS
@@ -622,7 +622,7 @@ void WorldRenderer::markDirtyFromLighting()
 		return;
 	}
 #endif
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	if (wiiBuildActive)
 	{
 		wiiBuildDirtyDuringBuild = true;
@@ -637,7 +637,7 @@ void WorldRenderer::markDirtyFromLighting()
 
 void WorldRenderer::setDontDraw()
 {
-	#if WII_PLATFORM || PS2_PLATFORM || PLATFORM_PC_LEGACY
+	#if PLATFORM_HANDLE_TERRAIN || PS2_PLATFORM || PLATFORM_PC_LEGACY
 	// Whatever edit marked this renderer urgent was at its old position.
 	urgentRebuild = false;
 	#endif
@@ -648,7 +648,7 @@ void WorldRenderer::setDontDraw()
 	pcLegacyCpuVisible = true;
 #endif
 	removeTileEntityRenderersFromGlobalList();
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	// A renderer is about to be recycled for another world position. Keeping its
 	// old, now invisible lists until the replacement can be built creates a
 	// deadlock at the GX cap: no new list fits because stale lists own the cache,

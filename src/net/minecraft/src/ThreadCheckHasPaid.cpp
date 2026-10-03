@@ -4,6 +4,7 @@
 #include "Session.h"
 #include "java/JavaNetwork.h"
 #include "java/System.h"
+#include "platform/StdThread.h"
 
 ThreadCheckHasPaid::ThreadCheckHasPaid(Minecraft *minecraft)
 	: field_28146_a(minecraft)
@@ -18,7 +19,7 @@ ThreadCheckHasPaid::~ThreadCheckHasPaid()
 
 void ThreadCheckHasPaid::start()
 {
-	worker = std::thread(&ThreadCheckHasPaid::run, this);
+	worker = PlatformStdThread(&ThreadCheckHasPaid::run, this);
 	worker.detach();
 }
 

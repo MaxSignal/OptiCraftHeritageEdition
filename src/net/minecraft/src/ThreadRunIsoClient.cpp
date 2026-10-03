@@ -3,6 +3,7 @@
 #include <chrono>
 
 #include "CanvasIsomPreview.h"
+#include "platform/StdThread.h"
 
 ThreadRunIsoClient::ThreadRunIsoClient(CanvasIsomPreview *canvasisompreview)
     : isoCanvas(canvasisompreview)
@@ -19,7 +20,7 @@ void ThreadRunIsoClient::start()
 {
     if (worker.joinable())
         return;
-    worker = std::thread(&ThreadRunIsoClient::run, this);
+    worker = PlatformStdThread(&ThreadRunIsoClient::run, this);
 }
 
 void ThreadRunIsoClient::run()

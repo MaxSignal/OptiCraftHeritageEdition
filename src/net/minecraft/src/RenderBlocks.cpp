@@ -258,7 +258,7 @@ bool RenderBlocks::accessIsAirBlock(int_t i, int_t j, int_t k)
 
 bool RenderBlocks::shouldRenderFace(Block *block, int_t i, int_t j, int_t k, int_t side)
 {
-#ifdef WII_PLATFORM
+#if defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 	if (wiiFaceMaskActive && side >= 0 && side < 6)
 	{
 		bool matches = false;
@@ -369,7 +369,7 @@ bool RenderBlocks::renderSimpleOpaqueCubePs2(Block *block, int_t i, int_t j, int
 }
 #endif
 
-#ifdef WII_PLATFORM
+#if defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 bool RenderBlocks::renderSimpleOpaqueCubeWii(Block *block, int_t i, int_t j, int_t k, unsigned char faceMask)
 {
 	if (block == nullptr || faceMask == 0)

@@ -7,6 +7,7 @@
 #if !PLATFORM_LOCAL_RESOURCES_ONLY
 #include <vector>
 #include <thread>
+#include "platform/StdThread.h"
 #endif
 
 class Minecraft;
@@ -48,6 +49,6 @@ private:
 	Minecraft *mc;
 	std::atomic_bool closing;
 #if !PLATFORM_LOCAL_RESOURCES_ONLY
-	std::thread worker;
+	PlatformStdThread worker;
 #endif
 };

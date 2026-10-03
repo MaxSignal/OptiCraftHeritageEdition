@@ -2,6 +2,7 @@
 
 #include <string>
 #include <thread>
+#include "platform/StdThread.h"
 
 class ImageBuffer;
 class ThreadDownloadImageData;
@@ -20,5 +21,5 @@ private:
 	std::string location;
 	ImageBuffer *buffer;
 	ThreadDownloadImageData *imageData;
-	std::thread worker;
+	PlatformStdThread worker;
 };

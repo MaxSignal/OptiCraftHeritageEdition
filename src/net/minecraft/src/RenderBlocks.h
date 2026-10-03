@@ -33,7 +33,7 @@ public:
 #ifdef PS2_PLATFORM
 	bool renderSimpleOpaqueCubePs2(Block *block, int_t i, int_t j, int_t k, unsigned char faceMask);
 #endif
-#ifdef WII_PLATFORM
+#if defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 	bool renderSimpleOpaqueCubeWii(Block *block, int_t i, int_t j, int_t k, unsigned char faceMask);
 #endif
 
@@ -191,7 +191,7 @@ public:
 	int_t ps2FaceY = 0;
 	int_t ps2FaceZ = 0;
 #endif
-#ifdef WII_PLATFORM
+#if defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 	unsigned char wiiFaceMask = 0x3f;
 	bool wiiFaceMaskActive = false;
 	int_t wiiFaceX = 0;

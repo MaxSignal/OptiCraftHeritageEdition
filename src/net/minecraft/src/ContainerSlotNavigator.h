@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 
 #include "java/Type.h"
 #include "platform/Input.h"

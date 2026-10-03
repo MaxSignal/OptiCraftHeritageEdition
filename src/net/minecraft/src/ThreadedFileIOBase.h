@@ -7,6 +7,7 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#include "platform/StdThread.h"
 
 class IThreadedFileIO;
 
@@ -35,7 +36,7 @@ private:
 	std::mutex queueMutex;
 	std::condition_variable queueCondition;
 	std::condition_variable finishCondition;
-	std::thread worker;
+	PlatformStdThread worker;
 	std::uint64_t writeQueuedCounter;
 	std::uint64_t savedIOCounter;
 	bool isThreadWaiting;

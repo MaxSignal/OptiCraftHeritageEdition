@@ -5,6 +5,7 @@
 
 #include "NetworkManager.h"
 #include "platform/Log.h"
+#include "platform/StdThread.h"
 
 ThreadMonitorConnection::ThreadMonitorConnection(NetworkManager *networkManager)
     : netManager(networkManager)
@@ -20,7 +21,7 @@ ThreadMonitorConnection::~ThreadMonitorConnection()
 void ThreadMonitorConnection::start()
 {
     if (!worker.joinable())
-        worker = std::thread(&ThreadMonitorConnection::run, this);
+        worker = PlatformStdThread(&ThreadMonitorConnection::run, this);
 }
 
 void ThreadMonitorConnection::run()
@@ -30,7 +31,7 @@ void ThreadMonitorConnection::run()
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
         if (netManager != nullptr && NetworkManager::isRunning(netManager))
         {
-            std::thread *writeThread = NetworkManager::getWriteThread(netManager);
+            PlatformStdThread *writeThread = NetworkManager::getWriteThread(netManager);
             (void)writeThread; // C++ shutdown wakes the owned writer instead of interrupting std::thread.
             netManager->networkShutdown("disconnect.closed", std::vector<std::string>());
         }

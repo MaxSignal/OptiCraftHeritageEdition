@@ -90,7 +90,7 @@ void GuiScreenAddServer::actionPerformed(GuiButton *button)
 
 void GuiScreenAddServer::keyTyped(char_t c, int_t key)
 {
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
     if (c == '\r' || key == lwjgl::Keyboard::KEY_RETURN)
     {
         if (serverName != nullptr && serverName->getFocused())

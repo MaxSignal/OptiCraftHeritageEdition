@@ -17,6 +17,8 @@
 #include "java/JavaNetwork.h"
 #include "java/Arithmetic.h"
 #include "java/System.h"
+#include "platform/StdThread.h"
+#include "platform/PlatformCompat.h"
 
 int_t NetworkManager::field_28145_d[256];
 int_t NetworkManager::field_28144_e[256];
@@ -47,7 +49,7 @@ NetworkManager::NetworkManager(const std::string &host, int_t port, const std::s
 	if (socketInputStream == nullptr || socketOutputStream == nullptr)
 		throw std::runtime_error("Could not create network streams");
 	socketOutputStream->exceptions(std::ios::badbit | std::ios::failbit);
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 #ifdef PS2_PLATFORM
 	constexpr int kNetworkThreadPriority = Ps2ThreadPriority::kNetwork;
 #else
@@ -68,8 +70,8 @@ NetworkManager::NetworkManager(const std::string &host, int_t port, const std::s
 #else
 	try
 	{
-		readThread = std::thread(&NetworkManager::readThreadRun, this);
-		writeThread = std::thread(&NetworkManager::writeThreadRun, this);
+		readThread = PlatformStdThread(&NetworkManager::readThreadRun, this);
+		writeThread = PlatformStdThread(&NetworkManager::writeThreadRun, this);
 	}
 	catch (...)
 	{
@@ -88,7 +90,7 @@ NetworkManager::NetworkManager(const std::string &host, int_t port, const std::s
 NetworkManager::~NetworkManager()
 {
 	networkShutdown("disconnect.closed", std::vector<std::string>());
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	if (platformReadThread.joinable() && !platformReadThread.isCurrent()) platformReadThread.join();
 	if (platformWriteThread.joinable() && !platformWriteThread.isCurrent()) platformWriteThread.join();
 #else
@@ -174,7 +176,7 @@ bool NetworkManager::sendPacket()
 
 void NetworkManager::wakeThreads()
 {
-#if !defined(WII_PLATFORM) && !defined(PS2_PLATFORM)
+#if !defined(WII_PLATFORM) && !defined(PS2_PLATFORM) && !defined(NSPIRE_PLATFORM)
 	threadSleepCondition.notify_all();
 #endif
 }
@@ -229,7 +231,7 @@ bool NetworkManager::readPacket()
 					}
 				}
 
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 				// Do not turn a normal server chunk burst into a disconnect. Holding
 				// this one already-decoded packet while the game thread drains the
 				// bounded queue applies TCP backpressure and caps the peak at the
@@ -415,7 +417,7 @@ void NetworkManager::closeConnection()
 	if (networkSocket != nullptr)
 		networkSocket->interruptRead();
 
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	// The writer closes the connection after the queued disconnect packet has
 	// been flushed. interruptRead() only shuts down the receive side here.
 #else
@@ -423,7 +425,7 @@ void NetworkManager::closeConnection()
 	// In C++, keep the delayed closer owned by the manager so it cannot outlive `this`.
 	if (!closeThread.joinable())
 	{
-		closeThread = std::thread([this]()
+		closeThread = PlatformStdThread([this]()
 		{
 			std::unique_lock<std::mutex> lock(threadSleepLock);
 			threadSleepCondition.wait_for(lock, std::chrono::milliseconds(2000), [this]()
@@ -438,7 +440,7 @@ void NetworkManager::closeConnection()
 #endif
 }
 
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 void *NetworkManager::platformReadThreadEntry(void *argument)
 {
 	try { static_cast<NetworkManager *>(argument)->readThreadRun(); }
@@ -527,6 +529,9 @@ void NetworkManager::sleepThread()
 	// PS2 libstdc++ does not provide a dependable std::thread/condition_variable
 	// backend. Use the EE kernel scheduler directly.
 	DelayThread(2000);
+#elif defined(NSPIRE_PLATFORM)
+	// No network threads exist on the calculator (NO_NETWORK, no threads).
+	PlatformCompat::delay(2);
 #else
 	std::unique_lock<std::mutex> lock(threadSleepLock);
 	threadSleepCondition.wait_for(lock, std::chrono::milliseconds(2));
@@ -564,9 +569,9 @@ void NetworkManager::handleNetworkException(NetworkManager *networkmanager, std:
 		networkmanager->onNetworkError(exception);
 }
 
-std::thread *NetworkManager::getReadThread(NetworkManager *networkmanager)
+PlatformStdThread *NetworkManager::getReadThread(NetworkManager *networkmanager)
 {
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	(void)networkmanager;
 	return nullptr;
 #else
@@ -574,9 +579,9 @@ std::thread *NetworkManager::getReadThread(NetworkManager *networkmanager)
 #endif
 }
 
-std::thread *NetworkManager::getWriteThread(NetworkManager *networkmanager)
+PlatformStdThread *NetworkManager::getWriteThread(NetworkManager *networkmanager)
 {
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	(void)networkmanager;
 	return nullptr;
 #else

@@ -15,7 +15,7 @@
 #include "ps2/storage/assets/Ps2Assets.h"
 #endif
 
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 #include "platform/Input.h"
 #endif
 
@@ -305,7 +305,7 @@ void GuiLoadSkinsList::keyTyped(char_t c, int_t key)
 
 void GuiLoadSkinsList::handleSpecializedMenuInput()
 {
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     const PlatformTextInputSnapshot pad = platformTextInputSnapshot(platformMenuPad());
     if (!pad.connected)
         return;

@@ -197,7 +197,7 @@ RenderGlobal::RenderGlobal(Minecraft *minecraft, RenderEngine *renderengine)
 #if PLATFORM_PS2
 	MC_LOG_INFO("ps2", "RenderGlobal: allocating sky meshes\n");
 #endif
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 	renderStaticMeshCreate(starMesh);
 	renderStaticMeshCreate(skyMesh);
 	renderStaticMeshCreate(skyMesh2);
@@ -310,7 +310,7 @@ RenderGlobal::RenderGlobal(Minecraft *minecraft, RenderEngine *renderengine)
 RenderGlobal::~RenderGlobal()
 {
 	changeWorld(nullptr);
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 	renderStaticMeshDestroy(starMesh);
 	renderStaticMeshDestroy(skyMesh);
 	renderStaticMeshDestroy(skyMesh2);
@@ -410,7 +410,7 @@ void RenderGlobal::renderStars()
 		}
 	}
 
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 	tessellator->finishStaticMesh(starMesh);
 #else
 	tessellator->draw();
@@ -446,7 +446,7 @@ void RenderGlobal::loadRenderers()
 	Block::leaves->setGraphicsLevel(Config::isTreesFancy());
 	renderDistance = mc->gameSettings->renderDistance;
 	worldRenderersToUpdate.clear();
-#if (PLATFORM_PS2 || PLATFORM_WII) && PLATFORM_CENTER_VERTICAL_RENDERERS
+#if (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE) && PLATFORM_CENTER_VERTICAL_RENDERERS
 	verticalWindowInitialized = false;
 #endif
 #if !defined(PS2_PLATFORM)
@@ -856,7 +856,7 @@ jstring RenderGlobal::getDebugInfoEntities()
 }
 
 #if PLATFORM_CENTER_VERTICAL_RENDERERS
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 int_t RenderGlobal::chooseConsoleVerticalStartSection(int_t playerBlockY) const
 {
 	const int_t maxStartSection = std::max(0, WorldHeight::SECTION_COUNT - renderChunksTall);
@@ -925,7 +925,7 @@ void RenderGlobal::remapCenteredVerticalRendererSlots(int_t newStartSection)
 		}
 	}
 
-#if (PLATFORM_PS2 || PLATFORM_WII) && MC_LOG_LEVEL > 2
+#if (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE) && MC_LOG_LEVEL > 2
 	MC_LOG_DEBUG("render", "vertical shift reused=%d recycled=%d start=%d->%d\n",
 		(int)reused, (int)recycled, (int)verticalStartSection, (int)newStartSection);
 #endif
@@ -953,7 +953,7 @@ void RenderGlobal::markRenderersForNewPosition(int_t i, int_t j, int_t k)
 	// Console windows favour terrain below the player and move only when the
 	// player reaches a guard edge, avoiding section-boundary oscillation.
 	int_t startSection = 0;
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 	startSection = chooseConsoleVerticalStartSection(j + 8);
 	if (verticalWindowInitialized)
 		remapCenteredVerticalRendererSlots(startSection);
@@ -967,7 +967,7 @@ void RenderGlobal::markRenderersForNewPosition(int_t i, int_t j, int_t k)
 	remapCenteredVerticalRendererSlots(startSection);
 #endif
 	verticalStartSection = startSection;
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 	verticalWindowInitialized = true;
 #endif
 #endif
@@ -1041,7 +1041,7 @@ void RenderGlobal::enqueueRendererUpdate(WorldRenderer *worldrenderer)
 #endif
 }
 
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 void RenderGlobal::enqueueRendererUpdatePriority(WorldRenderer *worldrenderer)
 {
 	if (worldrenderer == nullptr)
@@ -1217,7 +1217,7 @@ int_t RenderGlobal::sortAndRender(EntityLiving *entityliving, int_t i, double d)
 	// Keep the display-list cache below its high-water mark before the per-frame
 	// mesher starts asking for new terrain buffers. This prevents a full cache
 	// from turning an ordinary walk across chunk boundaries into missing terrain.
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	if (i == 0)
 		evictWiiMeshCache(entityliving);
 #endif
@@ -1337,7 +1337,7 @@ int_t RenderGlobal::sortAndRender(EntityLiving *entityliving, int_t i, double d)
 					accumulatedZ += translateZ;
 				}
 
-#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM)
+#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(NSPIRE_PLATFORM)
 				renderBeginOcclusionQuery(renderer->glOcclusionQuery);
 				renderer->callOcclusionQueryList();
 				renderEndOcclusionQuery();
@@ -1544,7 +1544,7 @@ int_t RenderGlobal::renderSortedRenderers(int_t i, int_t j, int_t k, double d)
 		}
 #endif
 
-#if PLATFORM_PS2 || defined(WII_PLATFORM)
+#if PLATFORM_PS2 || PLATFORM_HANDLE_TERRAIN
 		// Native console terrain uses the renderer itself as the draw contract.
 		// Visibility/pass checks above are sufficient; Wii resolves a GX handle
 		// later when RenderList submits the batch.
@@ -1774,7 +1774,7 @@ void RenderGlobal::renderSky(float f)
 	renderColor3f(f1, f2, f3);
 	if (Config::isSkyEnabled()) // OptiFine: Sky OFF (sol/luna/estrellas siguen visibles)
 	{
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 		renderStaticMeshDraw(skyMesh);
 #else
 		renderCallDisplayList(glSkyList);
@@ -1895,7 +1895,7 @@ void RenderGlobal::renderSky(float f)
 		float starBlue = f17;
 		applyPs2LegacyAtmosphereRgb(mc, starRed, starGreen, starBlue);
 		renderColor4f(starRed, starGreen, starBlue, f17);
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 		renderStaticMeshDraw(starMesh);
 #else
 		renderCallDisplayList(starGLCallList);
@@ -1917,7 +1917,7 @@ void RenderGlobal::renderSky(float f)
 	{
 		renderPushMatrix();
 		renderTranslate(0.0f, 12.0f, 0.0f);
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 		renderStaticMeshDraw(skyMesh2);
 #else
 		renderCallDisplayList(glSkyList2);
@@ -1961,7 +1961,7 @@ void RenderGlobal::renderSky(float f)
 	{
 		renderPushMatrix();
 		renderTranslate(0.0f, -((float)(horizonOffset - 16.0)), 0.0f);
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 		renderStaticMeshDraw(skyMesh2);
 #else
 		renderCallDisplayList(glSkyList2);
@@ -2619,7 +2619,7 @@ bool RenderGlobal::updateRenderers(EntityLiving *entityliving, bool flag)
 			{
 				candidate->urgentRebuild = false;
 				completed++;
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 				urgentVerticesBuilt += (int)candidate->getTotalMeshVertexCount();
 #endif
 			}
@@ -3040,7 +3040,7 @@ void RenderGlobal::markRenderersInRange(int_t i, int_t j, int_t k, int_t l, int_
 				const int sectionDiff = (i3 != centerSectionX ? 1 : 0) + (k3 != centerSectionY ? 1 : 0) + (i4 != centerSectionZ ? 1 : 0);
 				const bool isDirectFaceNeighbor = (sectionDiff <= 1);
 
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 				// Active builds must observe every mutation so deferred population
 				// can mark one final rebuild without throwing away the current staging
 				// mesh. markDirty() itself decides whether to coalesce or restart; a
@@ -3579,7 +3579,7 @@ void RenderGlobal::clipRenderersByFrustrum(ICamera *icamera, float f)
 		// never on whether a mesh exists, so testing an empty renderer is both
 		// valid and cheap: the full grid is 75 boxes against six float planes.
 		worldRenderers[i]->updateInFrustrum(icamera);
-#elif PLATFORM_WII
+#elif PLATFORM_HANDLE_TERRAIN
 		// Drop vanilla's `& 0xf` re-test throttle, but keep the
 		// skipAllRenderPasses() gate. The PS2 rationale above applies only in
 		// part here, and the two halves are worth separating.

@@ -6,6 +6,7 @@
 #include <ostream>
 
 #include "NetworkManager.h"
+#include "platform/StdThread.h"
 
 NetworkWriterThread::NetworkWriterThread(NetworkManager *networkmanager, const std::string &name)
     : netManager(networkmanager), threadName(name)
@@ -15,7 +16,7 @@ NetworkWriterThread::NetworkWriterThread(NetworkManager *networkmanager, const s
 void NetworkWriterThread::start()
 {
     alive = true;
-    thread = std::thread(&NetworkWriterThread::run, this);
+    thread = PlatformStdThread(&NetworkWriterThread::run, this);
 }
 
 bool NetworkWriterThread::isAlive() const

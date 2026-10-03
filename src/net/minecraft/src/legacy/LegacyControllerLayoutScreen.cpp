@@ -663,7 +663,7 @@ void LegacyControllerLayoutScreen::updateScreen()
     GuiScreen::updateScreen();
     syncSelectedControl();
 
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     if (platformTextInputExclusive())
         return;
 

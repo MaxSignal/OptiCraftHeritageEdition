@@ -17,7 +17,7 @@
 
 #include "pc/lwjgl/Keyboard.h"
 
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 #include "platform/Input.h"
 #endif
 
@@ -267,7 +267,7 @@ void GuiSkinSelector::deleteCurrentCustomSkin()
 
 void GuiSkinSelector::handleSpecializedMenuInput()
 {
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     const PlatformTextInputSnapshot pad = platformTextInputSnapshot(platformMenuPad());
     if (!pad.connected)
         return;

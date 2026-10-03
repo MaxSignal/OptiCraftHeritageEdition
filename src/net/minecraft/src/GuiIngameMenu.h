@@ -31,7 +31,7 @@ private:
 	int_t updateCounter;
 	int_t selectedControlIndex;
 	int_t hoveredControlIndex;
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 	long_t legacyPauseOpenedAtMillis;
 #endif
 #if PLATFORM_PS2

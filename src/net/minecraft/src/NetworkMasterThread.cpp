@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include "NetworkManager.h"
+#include "platform/StdThread.h"
 
 NetworkMasterThread::NetworkMasterThread(NetworkManager *networkmanager)
     : netManager(networkmanager)
@@ -13,7 +14,7 @@ NetworkMasterThread::NetworkMasterThread(NetworkManager *networkmanager)
 
 void NetworkMasterThread::start()
 {
-    thread = std::thread(&NetworkMasterThread::run, this);
+    thread = PlatformStdThread(&NetworkMasterThread::run, this);
     thread.detach();
 }
 
@@ -25,14 +26,14 @@ void NetworkMasterThread::run()
 
         // Java: if (readThread.isAlive()) readThread.stop()
         // C++ equivalent: detach so it no longer blocks join
-        std::thread *readThread = NetworkManager::getReadThread(netManager);
+        PlatformStdThread *readThread = NetworkManager::getReadThread(netManager);
         if (readThread != nullptr && readThread->joinable())
         {
             try { readThread->detach(); }
             catch (...) {}
         }
 
-        std::thread *writeThread = NetworkManager::getWriteThread(netManager);
+        PlatformStdThread *writeThread = NetworkManager::getWriteThread(netManager);
         if (writeThread != nullptr && writeThread->joinable())
         {
             try { writeThread->detach(); }

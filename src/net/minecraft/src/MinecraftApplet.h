@@ -4,6 +4,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include "platform/StdThread.h"
 
 class CanvasMinecraftApplet;
 class MinecraftAppletImpl;
@@ -39,5 +40,5 @@ private:
     std::unordered_map<std::string, std::string> parameters;
     std::unique_ptr<CanvasMinecraftApplet> mcCanvas;
     std::unique_ptr<MinecraftAppletImpl> mc;
-    std::thread mcThread;
+    PlatformStdThread mcThread;
 };

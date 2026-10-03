@@ -4,6 +4,7 @@
 #include <iostream>
 
 #include "StatsSyncher.h"
+#include "platform/StdThread.h"
 
 ThreadStatSyncherSend::ThreadStatSyncherSend(StatsSyncher *statssyncher, std::map<StatBase*, int_t> map)
 	: field_27233_a(map)
@@ -19,7 +20,7 @@ ThreadStatSyncherSend::~ThreadStatSyncherSend()
 
 void ThreadStatSyncherSend::start()
 {
-	worker = std::thread(&ThreadStatSyncherSend::run, this);
+	worker = PlatformStdThread(&ThreadStatSyncherSend::run, this);
 	worker.detach();
 }
 

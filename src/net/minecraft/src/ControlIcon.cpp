@@ -6,14 +6,14 @@
 #include "platform/PlatformConfig.h"
 #include "platform/RenderAPI.h"
 #include <algorithm>
-#if !PLATFORM_PS2 && !PLATFORM_WII
+#if !PLATFORM_PS2 && !PLATFORM_WII && !PLATFORM_NSPIRE
 #include <map>
 #endif
 
 ControlIcon controlIconTexture(Minecraft *mc, const std::string &label)
 {
     if (!mc || !mc->renderEngine || !mc->fontRenderer || label.empty()) return {};
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     struct Entry { const char *label; int_t cell; };
 #if PLATFORM_PS2
     constexpr const char *path = "/gui/buttons_ps2.png";
@@ -95,7 +95,7 @@ void drawControlIcon(Minecraft *mc, ControlIcon icon, int_t x, int_t y)
 {
     if (!mc || !mc->renderEngine || icon.texture < 0) return;
     float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
     int_t w = 0, h = 0;
     if (!mc->renderEngine->getTextureDimensions(icon.texture, &w, &h) || w <= 0 || h <= 0) return;
     // Sample inside the cell edges so filtering cannot bleed into its neighbors.

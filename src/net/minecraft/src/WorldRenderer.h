@@ -29,7 +29,7 @@ public:
 	void updateInFrustrum(ICamera *icamera);
 	void updateRenderer();
 	void markDirty();
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	// Wii mesh-cache eviction. Returns true only if this renderer was holding
 	// recorded terrain geometry that has now been released.
 	bool releaseDisplayListsForCache();
@@ -52,10 +52,10 @@ public:
 	void callOcclusionQueryList();
 	int_t getGLCallListForPass(int_t pass);
 #endif
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	void renderExtraTerrainMeshes(int_t pass);
 #endif
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || PLATFORM_PC_LEGACY
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM) || PLATFORM_PC_LEGACY
 	bool isTerrainBuildInProgress() const;
 #ifdef PS2_PLATFORM
 	// Drops an in-flight build and returns its staging lease. The renderer
@@ -79,13 +79,13 @@ public:
 	unsigned int ps2BuildRestarts = 0;
 #endif
 	bool lastTerrainBuildStepDidWork() const;
-#if PLATFORM_PC_LEGACY || PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PC_LEGACY || PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
 	bool hasPublishedTerrain() const { return isInitialized; }
 	int_t getTotalMeshVertexCount() const
 	{
 #if PLATFORM_PS2
 		return ps2VertexCount[0] + ps2VertexCount[1];
-#elif PLATFORM_WII
+#elif PLATFORM_HANDLE_TERRAIN
 		return wiiBuildVertexCount[0] + wiiBuildVertexCount[1];
 #else
 		return 0;
@@ -109,7 +109,7 @@ public:
 	std::uint8_t ps2VisibleFacesFrom(int_t face) const;
 	bool ps2CpuVisible = true;
 #endif
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	int_t getTerrainHandleForPass(int_t pass) const;
 
 	// Whether this section's mesh for that pass can contain texels the alpha
@@ -228,13 +228,13 @@ private:
 	bool needsOcclusionBoxUpdate;
 	void updateOcclusionBox();
 #endif
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 	// OptiFine CTM atlases are kept as backend-neutral captured meshes. The
 	// normal terrain mesh remains on /terrain.png; these groups are replayed
 	// after it with their own texture binding.
 	std::vector<TessellatorTextureMesh> extraTextureMeshes[2];
 #endif
-#ifdef WII_PLATFORM
+#if PLATFORM_HANDLE_TERRAIN
 	// Native GX geometry uses an opaque handle namespace independent from
 	// OpenGL display-list names. Two handles are live and two are staging so a
 	// rebuild can publish atomically without touching the currently visible mesh.

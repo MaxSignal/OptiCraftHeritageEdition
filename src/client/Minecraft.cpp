@@ -1,4 +1,5 @@
 #include "net/minecraft/src/WorldSettings.h"
+#include "platform/StdThread.h"
 #include "net/minecraft/src/WorldType.h"
 #include "net/minecraft/src/WorldInfo.h"
 #include "net/minecraft/src/NBTTagCompound.h"
@@ -26,7 +27,7 @@
 #include <memory>
 #include <unordered_set>
 #include <typeinfo>
-#if defined(_WIN32) && !defined(PS2_PLATFORM) && !defined(WII_PLATFORM)
+#if defined(_WIN32) && !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(NSPIRE_PLATFORM)
 #include <windows.h>
 #endif
 #include "platform/RenderAPI.h"
@@ -126,7 +127,7 @@
 
 namespace
 {
-#if defined(_WIN32) && !defined(PS2_PLATFORM) && !defined(WII_PLATFORM)
+#if defined(_WIN32) && !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(NSPIRE_PLATFORM)
     bool validateProcessHeap(const char *stage)
     {
         const char *label = stage != nullptr ? stage : "<unknown>";
@@ -1447,7 +1448,7 @@ void Minecraft::closePlayerScreen(int playerIndex)
     if (playerIndex == 0)
     {
         ignorePauseMenuTicks = 3;
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE
         lwjgl::Keyboard::clearEvents();
 #endif
     }
@@ -1688,7 +1689,7 @@ void Minecraft::startCheckHasPaidThread()
     // a raw Minecraft* alive: copy the only data the request needs instead.
     const std::string username = session->username;
     const std::string sessionId = session->sessionId;
-    std::thread([username, sessionId]()
+    PlatformStdThread([username, sessionId]()
     {
         const std::string url = "https://login.minecraft.net/session?name="
             + username + "&session=" + sessionId;
@@ -2896,7 +2897,7 @@ void Minecraft::preloadWorld(const std::string &s)
 
     configureChunkProviderCache(ichunkprovider, chunkcoordinates.x >> 4, chunkcoordinates.z >> 4, gameSettings->renderDistance);
 
-#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_PC_LEGACY
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE || PLATFORM_PC_LEGACY
     // Gameplay generation can be deferred on low-end profiles, but this loading
     // screen is intentionally synchronous. Reuse the spawn-generation bypass so
     // console requests cannot return temporary blank chunks and Legacy PC keeps
@@ -2949,7 +2950,7 @@ void Minecraft::preloadWorld(const std::string &s)
         platformMemoryCheckpoint("preloadWorld resident region end");
     }
 
-#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_PC_LEGACY
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE || PLATFORM_PC_LEGACY
     theWorld->findingSpawnPoint = previousFindingSpawnPoint;
 #endif
 

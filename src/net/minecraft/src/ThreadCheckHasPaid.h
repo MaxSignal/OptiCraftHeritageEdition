@@ -1,6 +1,7 @@
 #pragma once
 
 #include <thread>
+#include "platform/StdThread.h"
 
 class Minecraft;
 
@@ -16,5 +17,5 @@ public:
 
 private:
 	Minecraft *field_28146_a;
-	std::thread worker;
+	PlatformStdThread worker;
 };

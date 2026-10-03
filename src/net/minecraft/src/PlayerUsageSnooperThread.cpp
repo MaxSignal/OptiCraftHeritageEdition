@@ -4,6 +4,7 @@
 
 #include "PlayerUsageSnooper.h"
 #include "PostHttp.h"
+#include "platform/StdThread.h"
 
 PlayerUsageSnooperThread::PlayerUsageSnooperThread(PlayerUsageSnooper *usageSnooper)
     : snooper(usageSnooper)
@@ -19,7 +20,7 @@ void PlayerUsageSnooperThread::run()
 
 void PlayerUsageSnooperThread::startDetached(PlayerUsageSnooper *snooper)
 {
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
     (void)snooper;
 #else
     // The original thread is daemon-like. Copy all data before detaching so the
@@ -28,7 +29,7 @@ void PlayerUsageSnooperThread::startDetached(PlayerUsageSnooper *snooper)
         return;
     const std::string url = snooper->getUrl();
     const PostHttp::Parameters parameters = snooper->snapshotParameters();
-    std::thread([url, parameters]()
+    PlatformStdThread([url, parameters]()
     {
         PostHttp::func_52018_a(url, parameters, true);
     }).detach();

@@ -4,6 +4,7 @@
 #include <thread>
 
 #include "java/Type.h"
+#include "platform/StdThread.h"
 
 class StatBase;
 class StatsSyncher;
@@ -21,5 +22,5 @@ public:
 private:
 	std::map<StatBase*, int_t> field_27233_a;
 	StatsSyncher *field_27232_b;
-	std::thread worker;
+	PlatformStdThread worker;
 };

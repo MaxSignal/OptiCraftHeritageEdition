@@ -3,6 +3,7 @@
 #include <chrono>
 
 #include "NetworkManager.h"
+#include "platform/StdThread.h"
 
 NetworkReaderThread::NetworkReaderThread(NetworkManager *networkmanager, const std::string &name)
     : netManager(networkmanager), threadName(name)
@@ -12,7 +13,7 @@ NetworkReaderThread::NetworkReaderThread(NetworkManager *networkmanager, const s
 void NetworkReaderThread::start()
 {
     alive = true;
-    thread = std::thread(&NetworkReaderThread::run, this);
+    thread = PlatformStdThread(&NetworkReaderThread::run, this);
 }
 
 bool NetworkReaderThread::isAlive() const
