@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -105,8 +106,11 @@ struct Light
 
 struct State
 {
-    std::vector<Mat4> stacks[3];
-    int matrixMode = 0;
+    // Modelview, projection, and one texture matrix per texture unit: the
+    // 1.2.5 lightmap programs unit 1's texture matrix (scale 1/256), which must
+    // not touch the terrain/item coordinates on unit 0.
+    std::vector<Mat4> stacks[4];
+    int matrixMode = 0; // 0 modelview, 1 projection, 2 texture (of activeUnit)
 
     bool texture2d[2] = {false, false};
     int boundTexture[2] = {0, 0};
@@ -151,9 +155,14 @@ std::unordered_map<int, std::unique_ptr<NglTexture>> g_textures;
 int g_nextTextureName = 1;
 bool g_initialized = false;
 
+int currentStackIndex()
+{
+    return g_state.matrixMode == 2 ? 2 + g_state.activeUnit : g_state.matrixMode;
+}
+
 Mat4& currentMatrix()
 {
-    return g_state.stacks[g_state.matrixMode].back();
+    return g_state.stacks[currentStackIndex()].back();
 }
 
 NglTexture* findTexture(int name)
@@ -697,6 +706,25 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh)
 #ifndef _TINSPIRE
     // Host simulator: NSPIRE_SIM_TRACE=1 logs every draw with its state.
     static const bool trace = std::getenv("NSPIRE_SIM_TRACE") != nullptr;
+    // NSPIRE_SIM_DUMPTEX=<name>: write that texture's RGB565 storage once.
+    static const char* dumpTex = std::getenv("NSPIRE_SIM_DUMPTEX");
+    if (dumpTex != nullptr && setup.texture != nullptr && std::atoi(dumpTex) == g_state.boundTexture[0])
+    {
+        const NglTexture* t = setup.texture;
+        if (std::FILE* f = std::fopen("texdump.ppm", "wb"))
+        {
+            std::fprintf(f, "P6\n%d %d\n255\n", t->stride, t->rows);
+            for (COLOR c : t->pixels)
+            {
+                const unsigned char rgb[3] = {static_cast<unsigned char>(((c >> 11) & 31) << 3),
+                                              static_cast<unsigned char>(((c >> 5) & 63) << 2),
+                                              static_cast<unsigned char>((c & 31) << 3)};
+                std::fwrite(rgb, 1, 3, f);
+            }
+            std::fclose(f);
+        }
+        dumpTex = nullptr;
+    }
     static std::vector<COLOR> before;
     if (trace)
         before.assign(NspireSystem::backBuffer(), NspireSystem::backBuffer() + 320 * 240);
@@ -1179,7 +1207,7 @@ void renderGetMatrix(RenderMatrixQuery query, float* values)
 {
     if (values == nullptr)
         return;
-    const int index = query == RenderMatrixQuery::Projection ? 1 : query == RenderMatrixQuery::Texture ? 2 : 0;
+    const int index = query == RenderMatrixQuery::Projection ? 1 : query == RenderMatrixQuery::Texture ? 2 + g_state.activeUnit : 0;
     const Mat4& m = g_state.stacks[index].back();
     std::copy(m.m, m.m + 16, values);
 }
@@ -1216,13 +1244,13 @@ void renderLoadIdentity() { currentMatrix() = identityMatrix(); }
 
 void renderPushMatrix()
 {
-    std::vector<Mat4>& stack = g_state.stacks[g_state.matrixMode];
+    std::vector<Mat4>& stack = g_state.stacks[currentStackIndex()];
     stack.push_back(stack.back());
 }
 
 void renderPopMatrix()
 {
-    std::vector<Mat4>& stack = g_state.stacks[g_state.matrixMode];
+    std::vector<Mat4>& stack = g_state.stacks[currentStackIndex()];
     if (stack.size() > 1)
         stack.pop_back();
 }
