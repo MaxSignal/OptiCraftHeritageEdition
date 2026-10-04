@@ -33,6 +33,7 @@
 #include "nspire/NspireSystem.h"
 #include "nspire/render/NglBackend.h"
 #include "nspire/render/NglFixed.h"
+#include "platform/Profiler.h"
 
 namespace
 {
@@ -1055,9 +1056,18 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh, bool fixedData = false)
     if (mesh.primitive == RenderPrimitive::Points)
         return true;
 
+    // Render sub-phase accounting for the status log ([phase] prep / vtx / tris):
+    // one clock read per stage of a draw call, not per vertex or triangle.
+    // Device only: the host simulator's virtual clock advances on every read.
+#ifdef _TINSPIRE
+    const std::uint64_t tPrep = NspireSystem::micros();
+#endif
     DrawSetup setup;
     if (!prepareDraw(setup))
         return true;
+#ifdef _TINSPIRE
+    const std::uint64_t tVertices = NspireSystem::micros();
+#endif
     ++g_stats.draws;
 
     const std::uint8_t* base = static_cast<const std::uint8_t*>(mesh.data) +
@@ -1065,6 +1075,9 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh, bool fixedData = false)
     g_vertexScratch.resize(static_cast<std::size_t>(mesh.count));
     for (int i = 0; i < mesh.count; ++i)
         processVertex(setup, mesh, base + static_cast<std::size_t>(i) * mesh.stride, fixedData, g_vertexScratch[i]);
+#ifdef _TINSPIRE
+    const std::uint64_t tTriangles = NspireSystem::micros();
+#endif
 
     const ClipVertex* v = g_vertexScratch.data();
     const int n = mesh.count;
@@ -1145,6 +1158,14 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh, bool fixedData = false)
     case RenderPrimitive::Points:
         break;
     }
+#ifdef _TINSPIRE
+    {
+        const std::uint64_t tEnd = NspireSystem::micros();
+        platformProfileTickPhase("prep", static_cast<long long>(tVertices - tPrep) * 1000LL);
+        platformProfileTickPhase("vtx", static_cast<long long>(tTriangles - tVertices) * 1000LL);
+        platformProfileTickPhase("tris", static_cast<long long>(tEnd - tTriangles) * 1000LL);
+    }
+#endif
     finishDraw();
 #ifndef _TINSPIRE
     if (trace)

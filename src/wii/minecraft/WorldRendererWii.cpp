@@ -107,6 +107,9 @@ void WorldRenderer::wiiBeginBuildState()
 {
 	wiiResetBuildState();
 	wiiBuildActive = true;
+#if defined(NSPIRE_PLATFORM)
+	nspireDenseValid = false;
+#endif
 	renderTerrainChunkHandlesClearStaging(terrainChunkHandles);
 }
 
@@ -228,6 +231,12 @@ bool WorldRenderer::wiiBuildRendererStep(int_t blockBudget)
 
 		Chunk::isLit = false;
 		ChunkCache chunkcache(worldObj, x0 - 1, y0 - 1, z0 - 1, x1 + 1, y1 + 1, z1 + 1);
+#if defined(NSPIRE_PLATFORM)
+		// Copied when this section's build (re)starts; later steps and the
+		// translucent pass reuse it.
+		chunkcache.useDenseBlockIds(nspireDenseIds, x0 - 1, y0 - 1, z0 - 1, x1, y1, z1, !nspireDenseValid);
+		nspireDenseValid = true;
+#endif
 		RenderBlocks renderblocks(&chunkcache);
 		Tessellator *tessellator = &Tessellator::instance;
 		tessellator->startDrawingQuads();
@@ -280,7 +289,11 @@ bool WorldRenderer::wiiBuildRendererStep(int_t blockBudget)
 				}
 #endif
 
-#if PLATFORM_FAST_SIMPLE_CUBE_RENDER
+#if PLATFORM_FAST_SIMPLE_CUBE_RENDER && defined(NSPIRE_PLATFORM)
+				if (wiiBuildPass == 0 && renderInfo.simpleOpaqueCube)
+					stepDrew |= renderblocks.renderSimpleOpaqueCubeNspire(block, x, y, z, exposedFaceMask, lx, ly, lz);
+				else
+#elif PLATFORM_FAST_SIMPLE_CUBE_RENDER
 				if (wiiBuildPass == 0 && renderInfo.simpleOpaqueCube)
 					stepDrew |= renderblocks.renderSimpleOpaqueCubeWii(block, x, y, z, exposedFaceMask);
 				else

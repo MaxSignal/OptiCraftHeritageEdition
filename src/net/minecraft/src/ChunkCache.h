@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 #include "IBlockAccess.h"
 #include "java/Type.h"
@@ -23,6 +24,14 @@ public:
 	~ChunkCache();
 
 	int_t getBlockId(int_t i, int_t j, int_t k) override;
+#if defined(NSPIRE_PLATFORM)
+	// Mesh builds: serve getBlockId for the inclusive box from a dense copy in
+	// `buffer` (owned by the caller; filled here when `fill` is set), instead of
+	// the chunk/section lookup per call -- a section build reads tens of
+	// thousands of IDs from an 18^3 neighbourhood.
+	void useDenseBlockIds(std::vector<std::uint8_t> &buffer, int_t x0, int_t y0, int_t z0,
+		int_t x1, int_t y1, int_t z1, bool fill);
+#endif
 	bool hasResidentChunkAtBlock(int_t i, int_t k) const;
 #if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM)
 	const ExtendedBlockStorage *getResidentBlockStorageAt(int_t i, int_t j, int_t k) const;
@@ -107,4 +116,9 @@ private:
 	Chunk **chunkArray;
 	World *worldObj;
 	bool levelsEmpty;
+#if defined(NSPIRE_PLATFORM)
+	const std::uint8_t *denseIds = nullptr;
+	int_t denseX0 = 0, denseY0 = 0, denseZ0 = 0;
+	int_t denseW = 0, denseH = 0, denseD = 0;
+#endif
 };

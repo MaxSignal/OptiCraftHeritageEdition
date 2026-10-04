@@ -256,6 +256,12 @@ private:
 	bool wiiBuildHasBrightness[2];
 	bool wiiBuildDrew[2];
 	bool wiiBuildActive;
+#if defined(NSPIRE_PLATFORM)
+	// Block IDs of this section's 18^3 neighbourhood, copied once per build
+	// (ChunkCache::useDenseBlockIds) and reused by every step and pass of it.
+	std::vector<std::uint8_t> nspireDenseIds;
+	bool nspireDenseValid = false;
+#endif
 	// Snapshot of the ChunkCache source columns used by the staging mesh. If a
 	// streamed neighbour appears or disappears between incremental steps, the
 	// partial mesh must restart instead of mixing both source states.

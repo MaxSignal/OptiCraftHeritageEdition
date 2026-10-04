@@ -51,6 +51,14 @@ public:
 	static int_t packOpaqueColorLegacy(int_t red, int_t green, int_t blue);
 	bool setPackedFaceStateLegacy(int_t packedColor, int_t packedBrightness);
 #endif
+#if defined(NSPIRE_PLATFORM)
+	// A unit cube face at section-local integer coordinates (0..15) with one
+	// 16x16 atlas tile, written from precomputed float bit patterns: no
+	// floating-point arithmetic on a CPU without an FPU. Same vertex order and
+	// texture corners as RenderBlocks' face functions. False if the
+	// tessellator is not in a state this shortcut covers.
+	bool addUnitCubeFaceLocal(int_t side, int_t lx, int_t ly, int_t lz, int_t tile);
+#endif
 #if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM)
 	bool addAxisAlignedFaceWithUVFast(int_t side, tess_coord_t x, tess_coord_t y, tess_coord_t z,
 		tess_coord_t width, tess_coord_t height,

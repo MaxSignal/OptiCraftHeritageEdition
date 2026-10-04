@@ -1,5 +1,7 @@
 #include "ChunkCache.h"
 
+#include <algorithm>
+
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -164,8 +166,50 @@ const ExtendedBlockStorage *ChunkCache::getResidentBlockStorageAt(int_t i, int_t
 }
 #endif
 
+#if defined(NSPIRE_PLATFORM)
+void ChunkCache::useDenseBlockIds(std::vector<std::uint8_t> &buffer, int_t x0, int_t y0, int_t z0,
+	int_t x1, int_t y1, int_t z1, bool fill)
+{
+	constexpr int_t kDenseMax = 18;
+	const int_t w = x1 - x0 + 1, h = y1 - y0 + 1, d = z1 - z0 + 1;
+	if (w <= 0 || h <= 0 || d <= 0 || w > kDenseMax || h > kDenseMax || d > kDenseMax)
+		return;
+	const std::size_t size = static_cast<std::size_t>(w * h * d);
+	if (fill || buffer.size() != size)
+	{
+		buffer.resize(size);
+		denseIds = nullptr; // fill through the regular path
+		std::size_t n = 0;
+		for (int_t x = x0; x <= x1; ++x)
+			for (int_t z = z0; z <= z1; ++z)
+				for (int_t y = y0; y <= y1; ++y)
+				{
+					const int_t id = getBlockId(x, y, z);
+					buffer[n++] = static_cast<std::uint8_t>(id > 255 ? 0 : id);
+				}
+	}
+	denseIds = buffer.data();
+	denseX0 = x0;
+	denseY0 = y0;
+	denseZ0 = z0;
+	denseW = w;
+	denseH = h;
+	denseD = d;
+}
+#endif
+
 int_t ChunkCache::getBlockId(int_t i, int_t j, int_t k)
 {
+#if defined(NSPIRE_PLATFORM)
+	if (denseIds != nullptr)
+	{
+		const int_t dx = i - denseX0, dy = j - denseY0, dz = k - denseZ0;
+		if (static_cast<std::uint32_t>(dx) < static_cast<std::uint32_t>(denseW) &&
+			static_cast<std::uint32_t>(dy) < static_cast<std::uint32_t>(denseH) &&
+			static_cast<std::uint32_t>(dz) < static_cast<std::uint32_t>(denseD))
+			return denseIds[(dx * denseD + dz) * denseH + dy];
+	}
+#endif
 	if (j < WorldHeight::MIN_Y || j >= WorldHeight::HEIGHT)
 		return 0;
 	const int_t l = JavaArithmetic::intSub(JavaArithmetic::intShr(i, 4), chunkX);

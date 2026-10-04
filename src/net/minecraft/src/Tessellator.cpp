@@ -1,4 +1,8 @@
 #include "Tessellator.h"
+#if defined(NSPIRE_PLATFORM)
+#include "nspire/NspireSystem.h"
+#include "platform/Profiler.h"
+#endif
 
 #include <algorithm>
 #include <utility>
@@ -18,7 +22,7 @@ static int32_t floatToRawIntBits(float f)
 	return result;
 }
 
-#if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM)
+#if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM) || defined(NSPIRE_PLATFORM)
 static inline void writeFastTerrainVertex(int_t *dst, int_t xBits, int_t yBits, int_t zBits,
 	int_t uBits, int_t vBits, int_t color, int_t brightness)
 {
@@ -100,8 +104,24 @@ void Tessellator::ensureRawBufferCapacity(int_t additionalInts)
 	bufferSize = newSize;
 }
 
+#if defined(NSPIRE_PLATFORM) && defined(_TINSPIRE)
+// [phase] tess: the whole immediate-mode draw, so the log can separate the
+// Tessellator's own cost from the renderer's prep/vtx/tris.
+namespace
+{
+struct TessDrawTimer
+{
+	std::uint64_t start = NspireSystem::micros();
+	~TessDrawTimer() { platformProfileTickPhase("tess", static_cast<long long>(NspireSystem::micros() - start) * 1000LL); }
+};
+}
+#endif
+
 int_t Tessellator::draw()
 {
+#if defined(NSPIRE_PLATFORM) && defined(_TINSPIRE)
+	const TessDrawTimer timer;
+#endif
 	if (!isDrawing)
 	{
 		throw std::runtime_error("Not tesselating!");
@@ -447,6 +467,77 @@ void Tessellator::addVertexWithUV(tess_coord_t d, tess_coord_t d1, tess_coord_t 
 	setTextureUV(d3, d4);
 	addVertex(d, d1, d2);
 }
+
+#if defined(NSPIRE_PLATFORM)
+bool Tessellator::addUnitCubeFaceLocal(int_t side, int_t lx, int_t ly, int_t lz, int_t tile)
+{
+	if (!isDrawing || drawMode != 7 || hasNormals || convertQuadsToTriangles || !hasColor || !hasBrightness ||
+		side < 0 || side > 5 || static_cast<unsigned>(lx) > 15u || static_cast<unsigned>(ly) > 15u ||
+		static_cast<unsigned>(lz) > 15u || tile < 0 || tile > 255)
+		return false;
+
+	// Positions 0..16, and per tile column/row the texture edges the face
+	// functions compute: (16 t) / 256 and (16 t + 16 - 0.01) / 256.
+	struct Tables
+	{
+		int_t pos[17];
+		int_t lo[16];
+		int_t hi[16];
+		Tables()
+		{
+			for (int i = 0; i <= 16; ++i)
+				pos[i] = floatToRawIntBits(static_cast<float>(i));
+			for (int t = 0; t < 16; ++t)
+			{
+				lo[t] = floatToRawIntBits(static_cast<float>(t * 16) / 256.0f);
+				hi[t] = floatToRawIntBits((static_cast<float>(t * 16 + 16) - 0.01f) / 256.0f);
+			}
+		}
+	};
+	static const Tables tables;
+
+	ensureRawBufferCapacity(32);
+	hasTexture = true;
+	const int_t x0 = tables.pos[lx], x1 = tables.pos[lx + 1];
+	const int_t y0 = tables.pos[ly], y1 = tables.pos[ly + 1];
+	const int_t z0 = tables.pos[lz], z1 = tables.pos[lz + 1];
+	const int_t u0 = tables.lo[tile & 15], u1 = tables.hi[tile & 15];
+	const int_t v0 = tables.lo[tile >> 4], v1 = tables.hi[tile >> 4];
+
+	int_t *dst = rawBuffer + rawBufferIndex;
+	auto vertex = [&](int_t x, int_t y, int_t z, int_t u, int_t v)
+	{
+		writeFastTerrainVertex(dst, x, y, z, u, v, color, brightness);
+		dst[6] = 0;
+		dst += 8;
+	};
+	switch (side)
+	{
+	case 0: // bottom
+		vertex(x0, y0, z1, u0, v1); vertex(x0, y0, z0, u0, v0); vertex(x1, y0, z0, u1, v0); vertex(x1, y0, z1, u1, v1);
+		break;
+	case 1: // top
+		vertex(x1, y1, z1, u1, v1); vertex(x1, y1, z0, u1, v0); vertex(x0, y1, z0, u0, v0); vertex(x0, y1, z1, u0, v1);
+		break;
+	case 2: // -z
+		vertex(x0, y1, z0, u1, v0); vertex(x1, y1, z0, u0, v0); vertex(x1, y0, z0, u0, v1); vertex(x0, y0, z0, u1, v1);
+		break;
+	case 3: // +z
+		vertex(x0, y1, z1, u0, v0); vertex(x0, y0, z1, u0, v1); vertex(x1, y0, z1, u1, v1); vertex(x1, y1, z1, u1, v0);
+		break;
+	case 4: // -x
+		vertex(x0, y1, z1, u1, v0); vertex(x0, y1, z0, u0, v0); vertex(x0, y0, z0, u0, v1); vertex(x0, y0, z1, u1, v1);
+		break;
+	default: // +x
+		vertex(x1, y0, z1, u0, v1); vertex(x1, y0, z0, u1, v1); vertex(x1, y1, z0, u1, v0); vertex(x1, y1, z1, u0, v0);
+		break;
+	}
+	addedVertices += 4;
+	vertexCount += 4;
+	rawBufferIndex += 32;
+	return true;
+}
+#endif
 
 #if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM)
 bool Tessellator::addAxisAlignedFaceWithUVFast(int_t side, tess_coord_t x, tess_coord_t y, tess_coord_t z,

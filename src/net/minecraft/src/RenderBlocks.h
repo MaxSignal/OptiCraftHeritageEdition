@@ -35,6 +35,12 @@ public:
 #endif
 #if defined(WII_PLATFORM) || defined(NSPIRE_PLATFORM)
 	bool renderSimpleOpaqueCubeWii(Block *block, int_t i, int_t j, int_t k, unsigned char faceMask);
+#if defined(NSPIRE_PLATFORM)
+	// Integer-only unit cube (section-local lx/ly/lz); falls back to
+	// renderSimpleOpaqueCubeWii for anything it does not cover.
+	bool renderSimpleOpaqueCubeNspire(Block *block, int_t i, int_t j, int_t k, unsigned char faceMask,
+		int_t lx, int_t ly, int_t lz);
+#endif
 #endif
 
 	// Set as soon as a block rendered through this instance can have put texels

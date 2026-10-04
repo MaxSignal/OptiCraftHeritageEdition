@@ -392,6 +392,73 @@ bool RenderBlocks::renderSimpleOpaqueCubeWii(Block *block, int_t i, int_t j, int
 }
 #endif
 
+#if defined(NSPIRE_PLATFORM)
+// renderStandardBlockWithColorMultiplier for a plain unit cube, without a
+// single floating-point operation: the colour multiplier and face shades in
+// integers, positions and texture corners from Tessellator's bit tables. On the
+// calculator the float face functions cost ~70 soft-float calls per face, most
+// of a section build. Anything with a texture transform, connected or natural
+// textures, better grass, fancy grass, anaglyph or smooth lighting takes the
+// regular path.
+bool RenderBlocks::renderSimpleOpaqueCubeNspire(Block *block, int_t i, int_t j, int_t k, unsigned char faceMask,
+	int_t lx, int_t ly, int_t lz)
+{
+	if (block == nullptr || faceMask == 0)
+		return false;
+	const bool plain = overrideBlockTexture < 0 && !flipTexture && bottomFaceRotation == 0 && topFaceRotation == 0 &&
+		eastFaceRotation == 0 && westFaceRotation == 0 && northFaceRotation == 0 && southFaceRotation == 0 &&
+		!Config::isConnectedTextures() && !Config::isNaturalTextures() && !Config::isBetterGrass() &&
+		!EntityRenderer::anaglyphEnabled &&
+		!(Minecraft::isAmbientOcclusionEnabled() && Block::lightValue[block->blockID] == 0);
+	if (!plain || (fancyGrass && block == static_cast<Block *>(Block::grass)))
+		return renderSimpleOpaqueCubeWii(block, i, j, k, faceMask);
+	block->setBlockBoundsBasedOnState(blockAccess, i, j, k);
+	if (block->minX != 0.0 || block->minY != 0.0 || block->minZ != 0.0 ||
+		block->maxX != 1.0 || block->maxY != 1.0 || block->maxZ != 1.0)
+		return renderBlockByRenderType(block, i, j, k);
+
+	enableAO = false;
+	Tessellator *tessellator = &Tessellator::instance;
+	const int_t colour = CustomColorizer::getColorMultiplier(block, blockAccess, i, j, k);
+	const int_t red = (colour >> 16) & 0xff, green = (colour >> 8) & 0xff, blue = colour & 0xff;
+	const bool grass = block == static_cast<Block *>(Block::grass);
+	const unsigned char mask = renderAllFaces ? 0x3f : faceMask;
+	static const int_t kNeighbour[6][3] = {{0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}};
+	// Face shade as a fraction n/d: down 0.5, up 1, z 0.8, x 0.6. Grass tints
+	// only its top (renderStandardBlockWithColorMultiplier).
+	static const int_t kShadeNum[6] = {1, 1, 4, 4, 3, 3};
+	static const int_t kShadeDen[6] = {2, 1, 5, 5, 5, 5};
+	bool rendered = false;
+	for (int_t side = 0; side < 6; ++side)
+	{
+		if ((mask & (1u << side)) == 0)
+			continue;
+		const int_t n = kShadeNum[side], d = kShadeDen[side];
+		if (grass && side != 1)
+			tessellator->setColorOpaque(255 * n / d, 255 * n / d, 255 * n / d);
+		else
+			tessellator->setColorOpaque(red * n / d, green * n / d, blue * n / d);
+		tessellator->setBrightness(block->getMixedBrightnessForBlock(blockAccess,
+			i + kNeighbour[side][0], j + kNeighbour[side][1], k + kNeighbour[side][2]));
+		const int_t texture = block->getBlockTexture(blockAccess, i, j, k, side);
+		if (!tessellator->addUnitCubeFaceLocal(side, lx, ly, lz, texture))
+		{
+			switch (side)
+			{
+			case 0: renderBottomFace(block, i, j, k, texture); break;
+			case 1: renderTopFace(block, i, j, k, texture); break;
+			case 2: renderEastFace(block, i, j, k, texture); break;
+			case 3: renderWestFace(block, i, j, k, texture); break;
+			case 4: renderNorthFace(block, i, j, k, texture); break;
+			default: renderSouthFace(block, i, j, k, texture); break;
+			}
+		}
+		rendered = true;
+	}
+	return rendered;
+}
+#endif
+
 #if PLATFORM_PC_LEGACY
 void RenderBlocks::setPcLegacyCompactTerrainMesh(RenderCapturedMesh *mesh, int_t originX, int_t originY, int_t originZ)
 {
