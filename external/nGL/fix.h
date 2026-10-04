@@ -41,20 +41,20 @@ public:
     Fix<s,T> operator -(const Fix<s,T>& other) const { Fix<s,T> ret; ret.value = value - other.value; return ret; }
     template <typename U> Fix<s,T> operator -(const U other) const { Fix<s,T> ret; ret.value = value - (other<<s); return ret; }
 
-    template <unsigned int s2, typename T2> Fix<s,T> operator *(const Fix<s2,T2>& other) const { Fix<s,T> ret; ret.value = (value * other.value) >> s2; return ret; }
+    template <unsigned int s2, typename T2> Fix<s,T> operator *(const Fix<s2,T2>& other) const { Fix<s,T> ret; ret.value = static_cast<T>((static_cast<int64_t>(value) * other.value) >> s2); return ret; }
     template <typename U> Fix<s,T> operator *(const U other) const { Fix<s,T> ret; ret.value = value * other; return ret; }
 
-    Fix<s,T> operator /(const Fix<s,T>& other) const { Fix<s,T> ret; ret.value = (value << s) / other.value; return ret; }
+    Fix<s,T> operator /(const Fix<s,T>& other) const { Fix<s,T> ret; ret.value = static_cast<T>((static_cast<int64_t>(value) << s) / other.value); return ret; }
     template <typename U> Fix<s,T> operator /(const U other) const { Fix<s,T> ret; ret.value = value / other; return ret; }
 
     Fix<s,T>& operator +=(const Fix<s,T>& other) { value += other.value; return *this; }
     Fix<s,T>& operator -=(const Fix<s,T>& other) { value -= other.value; return *this; }
     Fix<s,T>& operator *=(const float other) { value *= other; return *this; }
     Fix<s,T>& operator *=(const int other) { value *= other; return *this; }
-    Fix<s,T>& operator *=(const Fix<s,T>& other) { value = (value * other.value) >> s; return *this; }
+    Fix<s,T>& operator *=(const Fix<s,T>& other) { value = static_cast<T>((static_cast<int64_t>(value) * other.value) >> s); return *this; }
     Fix<s,T>& operator /=(const float other) { value /= other; return *this; }
     Fix<s,T>& operator /=(const int other) { value /= other; return *this; }
-    Fix<s,T>& operator /=(const Fix<s,T>& other) { value = (value << s) / other.value; return *this; }
+    Fix<s,T>& operator /=(const Fix<s,T>& other) { value = static_cast<T>((static_cast<int64_t>(value) << s) / other.value); return *this; }
 
     constexpr bool operator >(const Fix<s,T>& other) const { return value > other.value; }
     constexpr bool operator <(const Fix<s,T>& other) const { return value < other.value; }

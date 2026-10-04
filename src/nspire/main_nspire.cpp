@@ -16,6 +16,7 @@
 int main(int argc, char** argv)
 {
 	NspireSystem::initialize(argc, argv);
+	NspireSystem::log("OptiCraft Heritage for TI-Nspire, built " __DATE__ " " __TIME__ "\n");
 
 	try
 	{

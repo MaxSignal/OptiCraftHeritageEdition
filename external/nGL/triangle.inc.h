@@ -173,7 +173,9 @@
         const int u_mask = loc_texture.width - 1;
         const int v_mask = loc_texture.height - 1;
     #endif
-    const bool depth_test = ngl_raster.depth_test;
+    const NGLRasterState rs = ngl_raster;
+    const bool depth_test = rs.depth_test;
+    const int depth_bias = rs.depth_bias;
 
     //If xstart will get smaller than xend
     if(dx_lower < dx_far)
@@ -205,20 +207,20 @@
             decltype(screen) screen_buf = screen_buf_line + x1;
             for(int x = x1; x < x2; x += 1, ++z_buf, ++screen_buf)
             {
-                if(__builtin_expect(!depth_test || TriFix(*z_buf) > z, true))
+                if(__builtin_expect(!depth_test || TriFix(int(*z_buf) + depth_bias) > z, true))
                 {
                     #ifdef TEXTURE_SUPPORT
                         COLOR c = loc_texture.bitmap[(u.floor() & u_mask) + (v.floor() & v_mask)*loc_texture.width];
                         #ifdef TRANSPARENCY
                             if(__builtin_expect(c != 0x0000, 1))
-                                ngl_put_pixel(screen_buf, z_buf, c, z, true);
+                                ngl_put_pixel(rs, screen_buf, z_buf, c, z, true);
                         #else
-                            ngl_put_pixel(screen_buf, z_buf, c, z, true);
+                            ngl_put_pixel(rs, screen_buf, z_buf, c, z, true);
                         #endif
                     #elif defined(INTERPOLATE_COLORS)
-                        ngl_put_pixel(screen_buf, z_buf, colorRGB(r, g, b), z, false);
+                        ngl_put_pixel(rs, screen_buf, z_buf, colorRGB(r, g, b), z, false);
                     #else
-                        ngl_put_pixel(screen_buf, z_buf, low->c, z, false);
+                        ngl_put_pixel(rs, screen_buf, z_buf, low->c, z, false);
                     #endif
                 }
 
@@ -302,20 +304,20 @@
             decltype(screen) screen_buf = screen_buf_line + x1;
             for(int x = x1; x < x2; x += 1, ++z_buf, ++screen_buf)
             {
-                if(__builtin_expect(!depth_test || TriFix(*z_buf) > z, true))
+                if(__builtin_expect(!depth_test || TriFix(int(*z_buf) + depth_bias) > z, true))
                 {
                     #ifdef TEXTURE_SUPPORT
                         COLOR c = loc_texture.bitmap[(u.floor() & u_mask) + (v.floor() & v_mask)*loc_texture.width];
                         #ifdef TRANSPARENCY
                             if(__builtin_expect(c != 0x0000, 1))
-                                ngl_put_pixel(screen_buf, z_buf, c, z, true);
+                                ngl_put_pixel(rs, screen_buf, z_buf, c, z, true);
                         #else
-                            ngl_put_pixel(screen_buf, z_buf, c, z, true);
+                            ngl_put_pixel(rs, screen_buf, z_buf, c, z, true);
                         #endif
                     #elif defined(INTERPOLATE_COLORS)
-                        ngl_put_pixel(screen_buf, z_buf, colorRGB(r, g, b), z, false);
+                        ngl_put_pixel(rs, screen_buf, z_buf, colorRGB(r, g, b), z, false);
                     #else
-                        ngl_put_pixel(screen_buf, z_buf, low->c, z, false);
+                        ngl_put_pixel(rs, screen_buf, z_buf, low->c, z, false);
                     #endif
                 }
 

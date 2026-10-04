@@ -9,6 +9,7 @@
 //                                           Q drop, 1-9 hotbar, esc pause.
 //   shift                                   left shift (sneak; upper case)
 //   ctrl                                    left control
+//   ctrl + 1..9, 0                          F1..F10 (F2 screenshot, F3 debug)
 //   arrows / touchpad edges                 in game: mouse motion (camera look)
 //                                           in menus: the arrow keys (selection)
 //   ctrl + arrows (menus)                   the software cursor

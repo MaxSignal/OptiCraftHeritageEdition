@@ -47,6 +47,11 @@ bool legacyDrawPanorama(Minecraft *mc, int_t screenWidth, int_t screenHeight,
 
     drawPanoramaQuad(screenWidth, screenHeight, zLevel, uv, 0.0f, 0.0f, 1.0f);
 
+#if PLATFORM_NSPIRE
+    // Each blur tap is another full-screen blended quad through the software
+    // rasteriser; the sharp panorama alone keeps the menu responsive.
+    return true;
+#endif
     const float_t texelU = 1.0f / static_cast<float_t>(textureWidth);
     const float_t texelV = 1.0f / static_cast<float_t>(textureHeight);
     const float_t blurAlpha = 0.18f;

@@ -151,6 +151,7 @@ struct State
 };
 
 State g_state;
+NglBackend::Stats g_stats;
 std::unordered_map<int, std::unique_ptr<NglTexture>> g_textures;
 int g_nextTextureName = 1;
 bool g_initialized = false;
@@ -237,8 +238,11 @@ struct ClipVertex
 {
     float x, y, z, w;   // clip space
     float u, v;         // texel units
-    float r, g, b, a;   // lit colour, 0..1
-    float eyeDist;      // for fog
+    float fogZ;         // eye-space depth, for fog
+    int r, g, b, a;     // lit colour, 0..255
+    int fog;            // fog visibility 0..256 (256 = clear)
+    unsigned outcode;   // clip planes this vertex is outside of (bit per plane)
+    VERTEX screen;      // projected nGL vertex, valid when outcode == 0
 };
 
 struct DrawSetup
@@ -249,6 +253,11 @@ struct DrawSetup
     const NglTexture* lightmap = nullptr;
     bool textureMatrix = false;
     Mat4 texMatrix;
+    int color[4] = {255, 255, 255, 255}; // current colour, 0..255
+    // Lighting in eye space, set up once per draw (entities and items only).
+    float lightDir[2][3] = {};
+    float lightDiffuse[2][3] = {};
+    float ambient[3] = {};
 };
 
 std::vector<ClipVertex> g_vertexScratch;
@@ -258,21 +267,82 @@ float clamp01(float v)
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
-void lightmapColor(const NglTexture* lightmap, float s, float t, float out[3])
+int clamp255(int v)
 {
-    int block = static_cast<int>(s) >> 4;
-    int sky = static_cast<int>(t) >> 4;
+    return v < 0 ? 0 : (v > 255 ? 255 : v);
+}
+
+int toByte(float v)
+{
+    return clamp255(static_cast<int>(v * 255.0f + 0.5f));
+}
+
+// The 1.2.5 lightmap: unit 1 samples the 16x16 light texture at (block light,
+// sky light), each scaled by 16 in the brightness word.
+const std::uint8_t* lightmapTexel(const NglTexture* lightmap, int s, int t)
+{
+    int block = s >> 4;
+    int sky = t >> 4;
     block = block < 0 ? 0 : (block > 15 ? 15 : block);
     sky = sky < 0 ? 0 : (sky > 15 ? 15 : sky);
     if (lightmap->width < 16 || lightmap->height < 16 || lightmap->rgba.empty())
+        return nullptr;
+    return &lightmap->rgba[(static_cast<std::size_t>(sky) * lightmap->width + block) * 4];
+}
+
+constexpr float kGuardBand = 2.0f;
+
+unsigned computeOutcode(float x, float y, float z, float w)
+{
+    unsigned code = 0;
+    if (z + w < 0.0f) code |= 1u;                 // near
+    if (w - z < 0.0f) code |= 2u;                 // far
+    const float gw = kGuardBand * w;
+    if (gw + x < 0.0f) code |= 4u;                // left (guard band)
+    if (gw - x < 0.0f) code |= 8u;                // right
+    if (gw + y < 0.0f) code |= 16u;               // bottom
+    if (gw - y < 0.0f) code |= 32u;               // top
+    return code;
+}
+
+int fogVisibility256(float distance)
+{
+    float vis;
+    switch (g_state.fogMode)
     {
-        out[0] = out[1] = out[2] = 1.0f;
-        return;
+    case RenderFogMode::Linear:
+    {
+        const float span = g_state.fogEnd - g_state.fogStart;
+        vis = span <= 0.0f ? 1.0f : (g_state.fogEnd - distance) / span;
+        break;
     }
-    const std::uint8_t* p = &lightmap->rgba[(static_cast<std::size_t>(sky) * lightmap->width + block) * 4];
-    out[0] = p[0] * (1.0f / 255.0f);
-    out[1] = p[1] * (1.0f / 255.0f);
-    out[2] = p[2] * (1.0f / 255.0f);
+    case RenderFogMode::Exp2:
+    {
+        const float d = g_state.fogDensity * distance;
+        vis = std::exp(-d * d);
+        break;
+    }
+    default:
+        vis = std::exp(-g_state.fogDensity * distance);
+        break;
+    }
+    const int v = static_cast<int>(vis * 256.0f);
+    return v < 0 ? 0 : (v > 256 ? 256 : v);
+}
+
+VERTEX project(const ClipVertex& c)
+{
+    const float invW = 1.0f / c.w;
+    const int* vp = g_state.viewport;
+    const float sx = vp[0] + (c.x * invW * 0.5f + 0.5f) * vp[2];
+    const float sy = static_cast<float>(NspireSystem::kScreenHeight) - (vp[1] + (c.y * invW * 0.5f + 0.5f) * vp[3]);
+    float depth = clamp01(c.z * invW * 0.5f + 0.5f);
+    float zb = 32.0f + depth * 65000.0f;
+    if (g_state.polygonOffset)
+        zb += g_state.polygonOffsetUnits * 8.0f;
+    if (zb < 26.0f)
+        zb = 26.0f;
+    return VERTEX(GLFix(sx), GLFix(sy), GLFix(zb), GLFix(c.u), GLFix(c.v), 0);
 }
 
 void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, const std::uint8_t* base, ClipVertex& out)
@@ -302,13 +372,17 @@ void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, co
     const float* mv = setup.modelView.m;
     if (g_state.fog)
     {
-        const float ex = mv[0] * px + mv[4] * py + mv[8] * pz + mv[12];
-        const float ey = mv[1] * px + mv[5] * py + mv[9] * pz + mv[13];
+        // Eye-plane distance (GL's default fog coordinate), not the radial
+        // distance: three multiplies instead of nine and a square root.
         const float ez = mv[2] * px + mv[6] * py + mv[10] * pz + mv[14];
-        out.eyeDist = std::sqrt(ex * ex + ey * ey + ez * ez);
+        out.fogZ = ez < 0.0f ? -ez : ez;
+        out.fog = fogVisibility256(out.fogZ);
     }
     else
-        out.eyeDist = 0.0f;
+    {
+        out.fogZ = 0.0f;
+        out.fog = 256;
+    }
 
     // Texture coordinates, in texels of level 0.
     if (setup.texture != nullptr)
@@ -334,21 +408,21 @@ void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, co
     else
         out.u = out.v = 0.0f;
 
-    // Colour: vertex colour or current colour.
+    // Colour, in integers: vertex colour or current colour.
     if (mesh.hasColor)
     {
         const std::uint8_t* c = base + mesh.colorOffset;
-        out.r = c[0] * (1.0f / 255.0f);
-        out.g = c[1] * (1.0f / 255.0f);
-        out.b = c[2] * (1.0f / 255.0f);
-        out.a = c[3] * (1.0f / 255.0f);
+        out.r = c[0];
+        out.g = c[1];
+        out.b = c[2];
+        out.a = c[3];
     }
     else
     {
-        out.r = g_state.color[0];
-        out.g = g_state.color[1];
-        out.b = g_state.color[2];
-        out.a = g_state.color[3];
+        out.r = setup.color[0];
+        out.g = setup.color[1];
+        out.b = setup.color[2];
+        out.a = setup.color[3];
     }
 
     // Fixed-function lighting: Minecraft's two directional "standard item"
@@ -359,75 +433,72 @@ void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, co
         if (mesh.hasNormals)
         {
             const std::int8_t* nb = reinterpret_cast<const std::int8_t*>(base + mesh.normalOffset);
-            n[0] = nb[0] / 127.0f;
-            n[1] = nb[1] / 127.0f;
-            n[2] = nb[2] / 127.0f;
+            n[0] = nb[0] * (1.0f / 127.0f);
+            n[1] = nb[1] * (1.0f / 127.0f);
+            n[2] = nb[2] * (1.0f / 127.0f);
         }
         float en[3] = {
             mv[0] * n[0] + mv[4] * n[1] + mv[8] * n[2],
             mv[1] * n[0] + mv[5] * n[1] + mv[9] * n[2],
             mv[2] * n[0] + mv[6] * n[1] + mv[10] * n[2],
         };
-        const float len = std::sqrt(en[0] * en[0] + en[1] * en[1] + en[2] * en[2]);
-        if (len > 1e-6f)
+        const float len2 = en[0] * en[0] + en[1] * en[1] + en[2] * en[2];
+        if (len2 > 1e-12f)
         {
-            en[0] /= len;
-            en[1] /= len;
-            en[2] /= len;
+            const float inv = 1.0f / std::sqrt(len2);
+            en[0] *= inv;
+            en[1] *= inv;
+            en[2] *= inv;
         }
-        float lit[3] = {g_state.lightModelAmbient[0], g_state.lightModelAmbient[1], g_state.lightModelAmbient[2]};
+        float lit[3] = {setup.ambient[0], setup.ambient[1], setup.ambient[2]};
         for (int i = 0; i < 2; ++i)
         {
             if (!g_state.light[i])
                 continue;
-            const Light& l = g_state.lights[i];
-            const float d = std::max(0.0f, en[0] * l.dir[0] + en[1] * l.dir[1] + en[2] * l.dir[2]);
+            const float d = std::max(0.0f, en[0] * setup.lightDir[i][0] + en[1] * setup.lightDir[i][1] +
+                                               en[2] * setup.lightDir[i][2]);
             for (int c = 0; c < 3; ++c)
-                lit[c] += l.ambient[c] + l.diffuse[c] * d;
+                lit[c] += setup.lightDiffuse[i][c] * d;
         }
-        out.r *= clamp01(lit[0]);
-        out.g *= clamp01(lit[1]);
-        out.b *= clamp01(lit[2]);
+        out.r = (out.r * toByte(lit[0])) / 255;
+        out.g = (out.g * toByte(lit[1])) / 255;
+        out.b = (out.b * toByte(lit[2])) / 255;
     }
 
-    // The 1.2.5 lightmap: unit 1 samples the 16x16 light texture at
-    // (block light, sky light), each scaled by 16 in the brightness word.
     if (setup.lightmap != nullptr)
     {
-        float s = g_state.lightmapCoord[0], t = g_state.lightmapCoord[1];
+        int s = static_cast<int>(g_state.lightmapCoord[0]), t = static_cast<int>(g_state.lightmapCoord[1]);
         if (mesh.hasBrightness)
         {
             const std::uint32_t b = *reinterpret_cast<const std::uint32_t*>(base + mesh.brightnessOffset);
-            s = static_cast<float>(b & 0xFFFFu);
-            t = static_cast<float>(b >> 16);
+            s = static_cast<int>(b & 0xFFFFu);
+            t = static_cast<int>(b >> 16);
         }
-        float lm[3];
-        lightmapColor(setup.lightmap, s, t, lm);
-        out.r *= lm[0];
-        out.g *= lm[1];
-        out.b *= lm[2];
+        if (const std::uint8_t* lm = lightmapTexel(setup.lightmap, s, t))
+        {
+            out.r = (out.r * (lm[0] + 1)) >> 8;
+            out.g = (out.g * (lm[1] + 1)) >> 8;
+            out.b = (out.b * (lm[2] + 1)) >> 8;
+        }
     }
+
+    out.outcode = computeOutcode(out.x, out.y, out.z, out.w);
+    if (out.outcode == 0)
+        out.screen = project(out);
 }
 
 // ---------------------------------------------------------------------------
 // Clipping and rasterisation
 // ---------------------------------------------------------------------------
-constexpr float kGuardBand = 2.0f;
-
 ClipVertex lerpVertex(const ClipVertex& a, const ClipVertex& b, float t)
 {
-    ClipVertex r;
+    ClipVertex r = a;
     r.x = a.x + (b.x - a.x) * t;
     r.y = a.y + (b.y - a.y) * t;
     r.z = a.z + (b.z - a.z) * t;
     r.w = a.w + (b.w - a.w) * t;
     r.u = a.u + (b.u - a.u) * t;
     r.v = a.v + (b.v - a.v) * t;
-    r.r = a.r;
-    r.g = a.g;
-    r.b = a.b;
-    r.a = a.a;
-    r.eyeDist = a.eyeDist + (b.eyeDist - a.eyeDist) * t;
     return r;
 }
 
@@ -445,22 +516,14 @@ float planeDistance(const ClipVertex& v, int plane)
     }
 }
 
-int clipPolygon(ClipVertex* poly, int count, ClipVertex* scratch)
+int clipPolygon(ClipVertex* poly, int count, ClipVertex* scratch, unsigned planes)
 {
     ClipVertex* in = poly;
     ClipVertex* out = scratch;
     for (int plane = 0; plane < 6 && count > 0; ++plane)
     {
-        bool allInside = true;
-        for (int i = 0; i < count; ++i)
-            if (planeDistance(in[i], plane) < 0.0f)
-            {
-                allInside = false;
-                break;
-            }
-        if (allInside)
+        if ((planes & (1u << plane)) == 0)
             continue;
-
         int outCount = 0;
         for (int i = 0; i < count; ++i)
         {
@@ -481,48 +544,6 @@ int clipPolygon(ClipVertex* poly, int count, ClipVertex* scratch)
     return count;
 }
 
-struct ScreenVertex
-{
-    float x, y, z;
-    float u, v;
-};
-
-ScreenVertex toScreen(const ClipVertex& c)
-{
-    const float invW = 1.0f / c.w;
-    const int* vp = g_state.viewport;
-    ScreenVertex s;
-    s.x = vp[0] + (c.x * invW * 0.5f + 0.5f) * vp[2];
-    s.y = static_cast<float>(NspireSystem::kScreenHeight) - (vp[1] + (c.y * invW * 0.5f + 0.5f) * vp[3]);
-    float depth = clamp01(c.z * invW * 0.5f + 0.5f);
-    float zb = 32.0f + depth * 65000.0f;
-    if (g_state.polygonOffset)
-        zb += g_state.polygonOffsetUnits * 8.0f;
-    s.z = zb < 26.0f ? 26.0f : zb;
-    s.u = c.u;
-    s.v = c.v;
-    return s;
-}
-
-float fogVisibility(float distance)
-{
-    switch (g_state.fogMode)
-    {
-    case RenderFogMode::Linear:
-    {
-        const float span = g_state.fogEnd - g_state.fogStart;
-        return span <= 0.0f ? 1.0f : clamp01((g_state.fogEnd - distance) / span);
-    }
-    case RenderFogMode::Exp2:
-    {
-        const float d = g_state.fogDensity * distance;
-        return clamp01(std::exp(-d * d));
-    }
-    default:
-        return clamp01(std::exp(-g_state.fogDensity * distance));
-    }
-}
-
 COLOR colorFrom(float r, float g, float b)
 {
     return toRgb565(static_cast<std::uint8_t>(clamp01(r) * 255.0f),
@@ -530,114 +551,152 @@ COLOR colorFrom(float r, float g, float b)
                     static_cast<std::uint8_t>(clamp01(b) * 255.0f));
 }
 
+COLOR color565(int r, int g, int b)
+{
+    return toRgb565(static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g), static_cast<std::uint8_t>(b));
+}
+
 bool blendSkipsDraw()
 {
-    // A pure multiply that leaves the destination unchanged at alpha 0, and
-    // depth-equal multi-pass effects (enchantment glint): skip, both are
-    // decoration this renderer cannot do cheaply.
+    // Depth-equal multi-pass effects (enchantment glint): decoration this
+    // renderer cannot do cheaply.
     return g_state.depthTest && g_state.depthFunc == RenderCompare::Equal;
+}
+
+// Signed doubled area in window space (y down) from nGL's 8.8 coordinates.
+long long screenArea(const VERTEX& a, const VERTEX& b, const VERTEX& c)
+{
+    const long long x1 = static_cast<long long>(b.x.value) - a.x.value;
+    const long long y1 = static_cast<long long>(b.y.value) - a.y.value;
+    const long long x2 = static_cast<long long>(c.x.value) - a.x.value;
+    const long long y2 = static_cast<long long>(c.y.value) - a.y.value;
+    return x1 * y2 - x2 * y1;
+}
+
+bool culled(long long area)
+{
+    if (area == 0)
+        return true;
+    if (!g_state.cullFace)
+        return false;
+    // GL's counter-clockwise front face comes out with a negative signed area
+    // once y points down.
+    const bool front = area < 0;
+    return (front && g_state.cullFront) || (!front && g_state.cullBack);
 }
 
 void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex& v1, const ClipVertex& v2)
 {
-    // Flat colour for the whole triangle.
-    float r = (v0.r + v1.r + v2.r) * (1.0f / 3.0f);
-    float g = (v0.g + v1.g + v2.g) * (1.0f / 3.0f);
-    float b = (v0.b + v1.b + v2.b) * (1.0f / 3.0f);
-    const float a = (v0.a + v1.a + v2.a) * (1.0f / 3.0f);
+    ++g_stats.trianglesSubmitted;
+    if ((v0.outcode & v1.outcode & v2.outcode) != 0)
+        return; // entirely outside one plane
+
+    // Flat colour for the whole triangle, in integers.
+    int r = (v0.r + v1.r + v2.r) / 3;
+    int g = (v0.g + v1.g + v2.g) / 3;
+    int b = (v0.b + v1.b + v2.b) / 3;
+    const int a = (v0.a + v1.a + v2.a) / 3;
 
     bool blendHalf = false;
     if (g_state.blend)
     {
-        if (a < 0.12f)
+        // A 50% blend is the only blend there is, so faint overlays (vignettes,
+        // gradient washes) would come out far too strong -- and cost a
+        // full-screen read-modify-write. Below ~30% they are left out.
+        if (a < 77)
             return;
-        blendHalf = a < 0.85f ||
+        blendHalf = a < 217 ||
                     g_state.blendSrc == RenderBlendFactor::DstColor ||
                     (g_state.blendSrc == RenderBlendFactor::One && g_state.blendDst == RenderBlendFactor::One);
     }
-    if (g_state.alphaTest && a < 0.1f)
+    if (g_state.alphaTest && a < 26)
         return;
 
     COLOR fogAdd = 0;
     if (g_state.fog)
     {
-        const float vis = fogVisibility((v0.eyeDist + v1.eyeDist + v2.eyeDist) * (1.0f / 3.0f));
-        const float f = 1.0f - vis;
-        r *= vis;
-        g *= vis;
-        b *= vis;
-        if (f > 0.02f)
-            fogAdd = colorFrom(g_state.fogColor[0] * f, g_state.fogColor[1] * f, g_state.fogColor[2] * f);
-    }
-
-    ClipVertex poly[9] = {v0, v1, v2};
-    ClipVertex scratch[9];
-    const int count = clipPolygon(poly, 3, scratch);
-    if (count < 3)
-        return;
-
-    ScreenVertex sv[9];
-    for (int i = 0; i < count; ++i)
-        sv[i] = toScreen(poly[i]);
-
-    // Window-space winding with y pointing down: GL's counter-clockwise front
-    // face comes out with a negative signed area.
-    const float area = (sv[1].x - sv[0].x) * (sv[2].y - sv[0].y) - (sv[2].x - sv[0].x) * (sv[1].y - sv[0].y);
-    if (area == 0.0f)
-        return;
-    if (g_state.cullFace)
-    {
-        const bool front = area < 0.0f;
-        if ((front && g_state.cullFront) || (!front && g_state.cullBack))
-            return;
+        const int vis = (v0.fog + v1.fog + v2.fog) / 3;
+        const int f = 256 - vis;
+        r = (r * vis) >> 8;
+        g = (g * vis) >> 8;
+        b = (b * vis) >> 8;
+        if (f > 5)
+            fogAdd = color565(toByte(g_state.fogColor[0]) * f >> 8, toByte(g_state.fogColor[1]) * f >> 8,
+                              toByte(g_state.fogColor[2]) * f >> 8);
     }
 
     const bool textured = setup.texture != nullptr;
-    ngl_raster.blend = blendHalf;
-    ngl_raster.fog_add = fogAdd;
     COLOR vertexColor;
+    COLOR modulate = 0xFFFF;
     if (textured)
     {
-        const COLOR shade = colorFrom(r, g, b);
-        ngl_raster.modulate = (r > 0.98f && g > 0.98f && b > 0.98f) ? 0xFFFF : shade;
+        if (r < 250 || g < 250 || b < 250)
+            modulate = color565(r, g, b);
         const bool keyed = setup.texture->transparent && (g_state.alphaTest || g_state.blend);
         vertexColor = keyed ? TEXTURE_TRANSPARENT : 0;
     }
     else
-    {
-        ngl_raster.modulate = 0xFFFF;
-        vertexColor = colorFrom(r, g, b);
-    }
+        vertexColor = color565(r, g, b);
 
     VERTEX nv[9];
+    int count = 3;
+    if ((v0.outcode | v1.outcode | v2.outcode) == 0)
+    {
+        // Fast path: all three corners projected already, no clipping.
+        nv[0] = v0.screen;
+        nv[1] = v1.screen;
+        nv[2] = v2.screen;
+    }
+    else
+    {
+        ClipVertex poly[9] = {v0, v1, v2};
+        ClipVertex scratch[9];
+        count = clipPolygon(poly, 3, scratch, v0.outcode | v1.outcode | v2.outcode);
+        if (count < 3)
+            return;
+        for (int i = 0; i < count; ++i)
+            nv[i] = project(poly[i]);
+    }
+
+    if (culled(screenArea(nv[0], nv[1], nv[2])))
+        return;
+
+    ngl_raster.blend = blendHalf;
+    ngl_raster.fog_add = fogAdd;
+    ngl_raster.modulate = modulate;
+    ++g_stats.trianglesDrawn;
     for (int i = 0; i < count; ++i)
-        nv[i] = VERTEX(GLFix(sv[i].x), GLFix(sv[i].y), GLFix(sv[i].z), GLFix(sv[i].u), GLFix(sv[i].v), vertexColor);
+        nv[i].c = vertexColor;
     for (int i = 1; i + 1 < count; ++i)
         nglDrawTriangleZClipped(&nv[0], &nv[i], &nv[i + 1]);
 }
 
 void drawLine(const ClipVertex& a, const ClipVertex& b)
 {
+    if ((a.outcode & b.outcode) != 0)
+        return;
     ClipVertex poly[9] = {a, b, b};
     ClipVertex scratch[9];
     // Clip as a degenerate triangle; the first and last survivors are the ends.
-    const int count = clipPolygon(poly, 3, scratch);
+    const int count = clipPolygon(poly, 3, scratch, a.outcode | b.outcode);
     if (count < 2)
         return;
-    const ScreenVertex s0 = toScreen(poly[0]);
-    const ScreenVertex s1 = toScreen(poly[count - 1]);
-    const COLOR c = colorFrom(a.r, a.g, a.b);
+    const VERTEX s0 = project(poly[0]);
+    const VERTEX s1 = project(poly[count - 1]);
+    const COLOR c = color565(a.r, a.g, a.b);
     COLOR* fb = NspireSystem::backBuffer();
-    const float dx = s1.x - s0.x, dy = s1.y - s0.y;
-    const int steps = static_cast<int>(std::max(std::fabs(dx), std::fabs(dy))) + 1;
+    const int x0 = s0.x.toInteger<int>(), y0 = s0.y.toInteger<int>();
+    const int x1 = s1.x.toInteger<int>(), y1 = s1.y.toInteger<int>();
+    const int z0 = s0.z.toInteger<int>(), z1 = s1.z.toInteger<int>();
+    const int dx = x1 - x0, dy = y1 - y0;
+    const int steps = std::max(std::abs(dx), std::abs(dy)) + 1;
     for (int i = 0; i <= steps; ++i)
     {
-        const float t = static_cast<float>(i) / steps;
-        const int x = static_cast<int>(s0.x + dx * t);
-        const int y = static_cast<int>(s0.y + dy * t);
+        const int x = x0 + dx * i / steps;
+        const int y = y0 + dy * i / steps;
         if (x < 0 || y < 0 || x >= NspireSystem::kScreenWidth || y >= NspireSystem::kScreenHeight)
             continue;
-        const float z = s0.z + (s1.z - s0.z) * t - 64.0f;
+        const int z = z0 + (z1 - z0) * i / steps - 64;
         if (g_state.depthTest && nglZBufferAt(x, y) <= GLFix(z))
             continue;
         fb[y * NspireSystem::kScreenWidth + x] = c;
@@ -671,9 +730,24 @@ bool prepareDraw(DrawSetup& setup)
     }
     setup.texMatrix = g_state.stacks[2].back();
     setup.textureMatrix = !isIdentity(setup.texMatrix);
+    for (int i = 0; i < 4; ++i)
+        setup.color[i] = toByte(g_state.color[i]);
+    if (g_state.lighting)
+    {
+        for (int c = 0; c < 3; ++c)
+            setup.ambient[c] = g_state.lightModelAmbient[c] + g_state.lights[0].ambient[c] * g_state.light[0] +
+                               g_state.lights[1].ambient[c] * g_state.light[1];
+        for (int i = 0; i < 2; ++i)
+            for (int c = 0; c < 3; ++c)
+            {
+                setup.lightDir[i][c] = g_state.lights[i].dir[c];
+                setup.lightDiffuse[i][c] = g_state.lights[i].diffuse[c];
+            }
+    }
 
     glBindTexture(setup.texture ? &setup.texture->desc : nullptr);
     ngl_raster.depth_test = g_state.depthTest && g_state.depthFunc != RenderCompare::Always;
+    ngl_raster.depth_bias = (g_state.depthFunc == RenderCompare::LessEqual) ? 1u : 0u;
     ngl_raster.depth_write = g_state.depthMask;
     ngl_raster.color_write = g_state.colorMask;
     return true;
@@ -694,6 +768,7 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh)
     DrawSetup setup;
     if (!prepareDraw(setup))
         return true;
+    ++g_stats.draws;
 
     const std::uint8_t* base = static_cast<const std::uint8_t*>(mesh.data) +
                                static_cast<std::size_t>(mesh.first) * mesh.stride;
@@ -734,7 +809,7 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh)
                           static_cast<int>(mesh.primitive), n, g_state.texture2d[0] ? g_state.boundTexture[0] : -1,
                           setup.texture ? setup.texture->width : 0, setup.texture ? setup.texture->height : 0,
                           setup.lightmap != nullptr, g_state.depthTest, g_state.depthMask, g_state.blend,
-                          g_state.alphaTest, g_state.cullFace, v[0].r, v[0].g, v[0].b, v[0].a,
+                          g_state.alphaTest, g_state.cullFace, v[0].r / 255.0, v[0].g / 255.0, v[0].b / 255.0, v[0].a / 255.0,
                           v[0].x, v[0].y, v[0].z, v[0].w);
 #endif
     switch (mesh.primitive)
@@ -920,6 +995,22 @@ bool drawMesh(int handle)
 std::size_t meshBytes()
 {
     return g_meshBytes;
+}
+
+std::size_t textureBytes()
+{
+    std::size_t total = 0;
+    for (const auto& entry : g_textures)
+        if (entry.second)
+            total += entry.second->pixels.size() * sizeof(COLOR) + entry.second->rgba.size();
+    return total;
+}
+
+Stats takeStats()
+{
+    const Stats s = g_stats;
+    g_stats = Stats();
+    return s;
 }
 } // namespace NglBackend
 

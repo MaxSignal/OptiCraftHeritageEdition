@@ -2,11 +2,12 @@
 //
 // Clock: Ndless's newlib backend answers gettimeofday() from the RTC, which
 // counts whole seconds, so every std::chrono clock in the game would advance in
-// one-second steps and the 20 Hz tick loop would stall and then burst. The SP804
-// at 0x900D0000 has two timers; libndls' msleep() owns the first, so the second
-// (base + 0x20) runs free here at 32768 Hz and backs both micros() and, through
-// the linker's --wrap=_gettimeofday, newlib's own clock -- which is what fixes
-// System::nanoTime() and every direct std::chrono use in shared code at once.
+// one-second steps and the 20 Hz tick loop would stall and then burst. The first
+// SP804 timer at 0x900C0000 runs free here at 32768 Hz -- configured exactly the
+// way nSDL's SDL_GetTicks does it on CX/CX II (clock gate on, 32 kHz source,
+// 32-bit free-running), and restored on exit -- and backs both micros() and,
+// through the linker's --wrap=_gettimeofday, newlib's own clock, which is what
+// fixes System::nanoTime() and every direct std::chrono use in shared code.
 #if defined(NSPIRE_PLATFORM) && defined(_TINSPIRE)
 
 #include "nspire/NspireSystem.h"
@@ -22,14 +23,23 @@
 
 namespace
 {
-volatile std::uint32_t* const kTimer2Load    = reinterpret_cast<std::uint32_t*>(0x900D0020);
-volatile std::uint32_t* const kTimer2Value   = reinterpret_cast<std::uint32_t*>(0x900D0024);
-volatile std::uint32_t* const kTimer2Control = reinterpret_cast<std::uint32_t*>(0x900D0028);
+volatile std::uint32_t* const kTimerLoad    = reinterpret_cast<std::uint32_t*>(0x900C0000);
+volatile std::uint32_t* const kTimerValue   = reinterpret_cast<std::uint32_t*>(0x900C0004);
+volatile std::uint32_t* const kTimerControl = reinterpret_cast<std::uint32_t*>(0x900C0008);
+volatile std::uint32_t* const kTimerClock   = reinterpret_cast<std::uint32_t*>(0x900C0080);
+volatile std::uint32_t* const kClockGates   = reinterpret_cast<std::uint32_t*>(0x900B0018);
+constexpr std::uint32_t kTimerGateBit = 1u << 11;
+// A frame never takes this long; a bigger step between two reads means the
+// counter was touched behind our back, and is dropped rather than turned into
+// a jump of hours.
+constexpr std::uint32_t kMaxStepTicks = 32768u * 5u;
 volatile std::uint32_t* const kRtcSeconds    = reinterpret_cast<std::uint32_t*>(0x90090000);
 constexpr std::uint32_t kTimerHz = 32768;
 
 std::uint32_t g_savedControl = 0;
 std::uint32_t g_savedLoad = 0;
+std::uint32_t g_savedClock = 0;
+std::uint32_t g_savedGates = 0;
 std::uint32_t g_lastValue = 0;
 std::uint64_t g_ticks = 0;
 std::uint32_t g_rtcBase = 0;
@@ -61,13 +71,17 @@ const t_key* keyTable()
 
 void startTimer()
 {
-    g_savedControl = *kTimer2Control;
-    g_savedLoad = *kTimer2Load;
-    *kTimer2Control = 0;
-    *kTimer2Load = 0xFFFFFFFFu;
+    g_savedGates = *kClockGates;
+    g_savedControl = *kTimerControl;
+    g_savedLoad = *kTimerLoad;
+    g_savedClock = *kTimerClock;
+    *kClockGates = g_savedGates & ~kTimerGateBit;
+    *kTimerControl = 0;
+    *kTimerClock = 0xA;          // 32768 Hz source
+    *kTimerLoad = 0xFFFFFFFFu;
     // Enable, free-running, interrupt off, no prescale, 32-bit.
-    *kTimer2Control = 0b10000010u;
-    g_lastValue = *kTimer2Value;
+    *kTimerControl = 0x82u;
+    g_lastValue = *kTimerValue;
     g_ticks = 0;
     g_rtcBase = *kRtcSeconds;
     g_timerRunning = true;
@@ -77,9 +91,11 @@ void stopTimer()
 {
     if (!g_timerRunning)
         return;
-    *kTimer2Control = 0;
-    *kTimer2Load = g_savedLoad;
-    *kTimer2Control = g_savedControl;
+    *kTimerControl = 0;
+    *kTimerLoad = g_savedLoad;
+    *kTimerClock = g_savedClock;
+    *kTimerControl = g_savedControl;
+    *kClockGates = g_savedGates;
     g_timerRunning = false;
 }
 
@@ -88,8 +104,10 @@ std::uint64_t ticks()
     if (!g_timerRunning)
         return 0;
     // Down-counter: elapsed = previous - current, modulo 2^32.
-    const std::uint32_t value = *kTimer2Value;
-    g_ticks += static_cast<std::uint32_t>(g_lastValue - value);
+    const std::uint32_t value = *kTimerValue;
+    const std::uint32_t step = g_lastValue - value;
+    if (step <= kMaxStepTicks)
+        g_ticks += step;
     g_lastValue = value;
     return g_ticks;
 }
@@ -176,6 +194,14 @@ bool keyDown(int key)
 
 bool exitRequested() { return g_exit; }
 void requestExit() { g_exit = true; }
+
+extern "C" std::size_t nspire_heap_used();
+extern "C" std::size_t nspire_heap_peak();
+extern "C" unsigned nspire_heap_failures();
+
+std::size_t heapUsedBytes() { return nspire_heap_used(); }
+std::size_t heapPeakBytes() { return nspire_heap_peak(); }
+unsigned heapFailures() { return nspire_heap_failures(); }
 
 long heapFreeKb()
 {

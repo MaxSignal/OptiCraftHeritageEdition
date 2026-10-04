@@ -139,6 +139,10 @@ struct RGB
 struct NGLRasterState
 {
     bool depth_test = true;
+    // 1 turns the strict less-than test into less-or-equal (GL_LEQUAL, the
+    // depth function Minecraft runs with): a quad drawn over another at the
+    // same depth -- HUD icon fills, block cracks -- must pass.
+    unsigned depth_bias = 0;
     bool depth_write = true;
     bool color_write = true;
     bool blend = false;
@@ -166,20 +170,23 @@ static inline COLOR ngl_add_sat(COLOR c, COLOR a)
     return static_cast<COLOR>((r << 11) | (g << 5) | b);
 }
 
+// rs is the triangle's private copy of ngl_raster: the framebuffer writes
+// below could alias the global as far as the compiler knows, which would make
+// it reload every field for every pixel.
 template <typename Z>
-static inline void ngl_put_pixel(COLOR *screen_px, uint16_t *z_px, COLOR c, const Z z, const bool textured)
+static inline void ngl_put_pixel(const NGLRasterState &rs, COLOR *screen_px, uint16_t *z_px, COLOR c, const Z z, const bool textured)
 {
-    if(textured && ngl_raster.modulate != 0xFFFF)
-        c = ngl_shade(c, ngl_raster.modulate);
-    if(ngl_raster.fog_add)
-        c = ngl_add_sat(c, ngl_raster.fog_add);
-    if(ngl_raster.color_write)
+    if(textured && rs.modulate != 0xFFFF)
+        c = ngl_shade(c, rs.modulate);
+    if(rs.fog_add)
+        c = ngl_add_sat(c, rs.fog_add);
+    if(rs.color_write)
     {
-        if(ngl_raster.blend)
+        if(rs.blend)
             c = static_cast<COLOR>(((c & 0xF7DE) >> 1) + ((*screen_px & 0xF7DE) >> 1));
         *screen_px = c;
     }
-    if(ngl_raster.depth_write)
+    if(rs.depth_write)
         *z_px = z;
 }
 extern MATRIX *transformation;

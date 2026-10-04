@@ -16,13 +16,23 @@
 //                         <frame> shot <name>    write <name>.ppm
 //                         <frame> quit
 //   NSPIRE_SIM_MAX_FRAMES  hard stop (default 100000).
+//   NSPIRE_SIM_FRAME_MS    virtual clock: every clock in the process (std::chrono,
+//                       gettimeofday, micros) advances this many milliseconds per
+//                       presented frame instead of following real time -- runs
+//                       the game at calculator-like frame rates (e.g. 250).
 #if defined(NSPIRE_PLATFORM) && !defined(_TINSPIRE)
 
 #include "nspire/NspireSystem.h"
 #include "nspire/input/NspireKeys.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdarg>
+#include <malloc.h>
+#include <ctime>
+#include <sys/syscall.h>
+#include <sys/time.h>
+#include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -51,6 +61,16 @@ long g_dumpEvery = 0;
 long g_maxFrames = 100000;
 bool g_exit = false;
 std::chrono::steady_clock::time_point g_start;
+long g_frameMs = 0;              // 0: real time
+std::uint64_t g_virtualUs = 0;   // virtual clock, advanced per frame and per read
+constexpr std::uint64_t kVirtualEpochSec = 1790000000ull;
+
+std::uint64_t virtualNowUs()
+{
+    // Every read moves time forward a little, so code that spins until some
+    // time has passed still terminates.
+    return ++g_virtualUs;
+}
 
 const char* env(const char* name)
 {
@@ -157,6 +177,8 @@ void initialize(int argc, char** argv)
     g_outDir = env("NSPIRE_SIM_OUT") ? env("NSPIRE_SIM_OUT") : g_appDir + "/frames";
     if (const char* every = env("NSPIRE_SIM_DUMP_EVERY"))
         g_dumpEvery = std::atol(every);
+    if (const char* frameMs = env("NSPIRE_SIM_FRAME_MS"))
+        g_frameMs = std::atol(frameMs);
     if (const char* maxFrames = env("NSPIRE_SIM_MAX_FRAMES"))
         g_maxFrames = std::atol(maxFrames);
     if (const char* script = env("NSPIRE_SIM_SCRIPT"))
@@ -172,6 +194,8 @@ const std::string& appDir() { return g_appDir; }
 
 std::uint64_t micros()
 {
+    if (g_frameMs > 0)
+        return virtualNowUs();
     using namespace std::chrono;
     return static_cast<std::uint64_t>(duration_cast<microseconds>(steady_clock::now() - g_start).count());
 }
@@ -185,6 +209,8 @@ std::uint16_t* backBuffer() { return g_backBuffer.data(); }
 void present()
 {
     ++g_frame;
+    if (g_frameMs > 0)
+        g_virtualUs += static_cast<std::uint64_t>(g_frameMs) * 1000u;
     static const bool trace = env("NSPIRE_SIM_TRACE") != nullptr;
     if (trace)
         std::fprintf(stderr, "[frame %ld presented]\n", g_frame);
@@ -210,6 +236,20 @@ void requestExit() { g_exit = true; }
 
 long heapFreeKb() { return -1; }
 
+std::size_t heapUsedBytes()
+{
+    return static_cast<std::size_t>(mallinfo2().uordblks);
+}
+
+std::size_t heapPeakBytes()
+{
+    static std::size_t peak = 0;
+    peak = std::max(peak, heapUsedBytes());
+    return peak;
+}
+
+unsigned heapFailures() { return 0; }
+
 void log(const char* fmt, ...)
 {
     va_list args;
@@ -224,5 +264,32 @@ void fatal(const std::string& message)
     std::exit(1);
 }
 } // namespace NspireSystem
+
+// Clock interposition for NSPIRE_SIM_FRAME_MS. Defined in the executable, so
+// they take precedence over libc's for libstdc++ (std::chrono) as well; with
+// the virtual clock off they forward to the kernel.
+extern "C" int clock_gettime(clockid_t id, struct timespec* ts)
+{
+    if (g_frameMs > 0 && ts != nullptr)
+    {
+        const std::uint64_t us = virtualNowUs();
+        ts->tv_sec = static_cast<time_t>(kVirtualEpochSec + us / 1000000u);
+        ts->tv_nsec = static_cast<long>((us % 1000000u) * 1000u);
+        return 0;
+    }
+    return static_cast<int>(syscall(SYS_clock_gettime, id, ts));
+}
+
+extern "C" int gettimeofday(struct timeval* tv, void* tz)
+{
+    if (g_frameMs > 0 && tv != nullptr)
+    {
+        const std::uint64_t us = virtualNowUs();
+        tv->tv_sec = static_cast<time_t>(kVirtualEpochSec + us / 1000000u);
+        tv->tv_usec = static_cast<suseconds_t>(us % 1000000u);
+        return 0;
+    }
+    return static_cast<int>(syscall(SYS_gettimeofday, tv, tz));
+}
 
 #endif

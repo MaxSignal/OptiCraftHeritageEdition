@@ -136,6 +136,8 @@ else()
         # newlib's clock comes from the RTC in whole seconds under Ndless;
         # NspireSystem_device.cpp supplies a 32 kHz hardware-timer clock.
         "-Wl,--wrap=_gettimeofday"
+        # Heap accounting (NspireLibcShims_device.cpp).
+        "-Wl,--wrap=malloc,--wrap=free,--wrap=realloc,--wrap=calloc"
         "-Wl,-Map,${CMAKE_BINARY_DIR}/OptiCraft.map"
     )
     set(NSPIRE_BIN_DIR "${CMAKE_SOURCE_DIR}/bin/nspire")

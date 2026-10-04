@@ -73,6 +73,7 @@ float g_motionCarryY = 0.0f;
 std::uint64_t g_lastPollUs = 0;
 std::uint64_t g_repeatAtUs[NK_COUNT] = {};
 bool g_leftFromEnter = false;
+bool g_fkeyDown[NK_COUNT] = {};
 // Whether the pointer currently owns menu input (Wii model, see GuiScreen.cpp):
 // ctrl+arrows or the touchpad click hand it to the pointer, the plain arrows
 // and enter hand it back to keyboard selection.
@@ -82,11 +83,38 @@ constexpr int kParkedCursor = -10000;
 bool pressed(int key, const bool* now) { return now[key] && !g_prev[key]; }
 bool released(int key, const bool* now) { return !now[key] && g_prev[key]; }
 
+// ctrl + digit: the function keys the calculator lacks (F1 hide HUD, F2
+// screenshot, F3 debug screen, F5 camera, ...). Digits alone stay the hotbar.
+int functionKeyFor(int nspireKey)
+{
+    if (nspireKey >= NK_1 && nspireKey <= NK_9)
+        return Key::KEY_F1 + (nspireKey - NK_1);
+    if (nspireKey == NK_0)
+        return Key::KEY_F10;
+    return Key::KEY_NONE;
+}
+
 void emitKeys(const bool* now)
 {
     const bool shift = now[NK_SHIFT];
+    const bool ctrl = now[NK_CTRL];
     for (const KeyMapping& m : kKeyMappings)
     {
+        const int fkey = functionKeyFor(m.nspireKey);
+        if (fkey != Key::KEY_NONE && (ctrl || g_fkeyDown[m.nspireKey]))
+        {
+            if (pressed(m.nspireKey, now) && ctrl)
+            {
+                lwjgl::Keyboard::detail::pushKey(fkey, true);
+                g_fkeyDown[m.nspireKey] = true;
+            }
+            else if (released(m.nspireKey, now) && g_fkeyDown[m.nspireKey])
+            {
+                lwjgl::Keyboard::detail::pushKey(fkey, false);
+                g_fkeyDown[m.nspireKey] = false;
+            }
+            continue;
+        }
         if (pressed(m.nspireKey, now))
         {
             if (m.lwjglKey != Key::KEY_NONE)

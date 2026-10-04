@@ -12,6 +12,7 @@
 // Everything above this layer (lwjgl shims, nGL backend, storage) is identical
 // in both builds.
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -46,6 +47,11 @@ bool exitRequested();
 void requestExit();
 
 long heapFreeKb();
+// Heap accounting (malloc/free are wrapped on the calculator; mallinfo2 on the
+// host): bytes currently allocated, the high-water mark, failed allocations.
+std::size_t heapUsedBytes();
+std::size_t heapPeakBytes();
+unsigned heapFailures();
 
 void log(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 [[noreturn]] void fatal(const std::string& message);

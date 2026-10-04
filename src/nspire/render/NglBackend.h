@@ -29,4 +29,14 @@ void swapMeshes(int a, int b);
 bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float ty, float tz);
 bool drawMesh(int handle);
 std::size_t meshBytes();
+std::size_t textureBytes();
+
+// Draw counters since the last call (ClientProfilerBackend_NSPIRE logs them).
+struct Stats
+{
+    unsigned long draws = 0;
+    unsigned long trianglesSubmitted = 0;
+    unsigned long trianglesDrawn = 0;
+};
+Stats takeStats();
 }

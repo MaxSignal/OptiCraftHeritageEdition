@@ -146,6 +146,119 @@ NSPIRE_ATOMIC_SIZED(4, unsigned int)
 
 #undef NSPIRE_ATOMIC_SIZED
 
+// ---------------------------------------------------------------------------
+// Heap accounting. Linked with --wrap=malloc/free/realloc/calloc, so every
+// allocation made from game code (operator new included) carries a small
+// header with its size. newlib allocates internally through _malloc_r, which
+// calls the unwrapped malloc inside libsyscalls; those blocks have no header,
+// so the magic word tells the two apart when they come back through free().
+// The OS heap has no statistics of its own; this is the only way to see how
+// close the game runs to the limit, and to log the failure when it gets there.
+// ---------------------------------------------------------------------------
+void* __real_malloc(size_t);
+void __real_free(void*);
+void* __real_realloc(void*, size_t);
+
+namespace
+{
+constexpr std::uint32_t kHeapMagic = 0x4E535048u; // "NSPH"
+struct HeapHeader
+{
+    std::uint32_t magic;
+    std::uint32_t size;
+};
+static_assert(sizeof(HeapHeader) == 8, "keeps the 8-byte alignment malloc returns");
+
+std::size_t g_heapUsed = 0;
+std::size_t g_heapPeak = 0;
+unsigned g_heapFailures = 0;
+
+HeapHeader* headerOf(void* p)
+{
+    HeapHeader* h = static_cast<HeapHeader*>(p) - 1;
+    return h->magic == kHeapMagic ? h : nullptr;
+}
+
+void noteFailure(size_t size)
+{
+    ++g_heapFailures;
+    // Logging would allocate; keep the evidence in the counters and let the
+    // periodic status line report it.
+    (void)size;
+}
+} // namespace
+
+void* __wrap_malloc(size_t size)
+{
+    HeapHeader* h = static_cast<HeapHeader*>(__real_malloc(size + sizeof(HeapHeader)));
+    if (h == nullptr)
+    {
+        noteFailure(size);
+        return nullptr;
+    }
+    h->magic = kHeapMagic;
+    h->size = static_cast<std::uint32_t>(size);
+    g_heapUsed += size;
+    if (g_heapUsed > g_heapPeak)
+        g_heapPeak = g_heapUsed;
+    return h + 1;
+}
+
+void __wrap_free(void* p)
+{
+    if (p == nullptr)
+        return;
+    HeapHeader* h = headerOf(p);
+    if (h == nullptr)
+    {
+        __real_free(p);
+        return;
+    }
+    g_heapUsed -= h->size;
+    h->magic = 0;
+    __real_free(h);
+}
+
+void* __wrap_realloc(void* p, size_t size)
+{
+    if (p == nullptr)
+        return __wrap_malloc(size);
+    if (size == 0)
+    {
+        __wrap_free(p);
+        return nullptr;
+    }
+    HeapHeader* h = headerOf(p);
+    if (h == nullptr)
+        return __real_realloc(p, size);
+    const std::uint32_t oldSize = h->size;
+    HeapHeader* n = static_cast<HeapHeader*>(__real_realloc(h, size + sizeof(HeapHeader)));
+    if (n == nullptr)
+    {
+        noteFailure(size);
+        return nullptr;
+    }
+    n->size = static_cast<std::uint32_t>(size);
+    g_heapUsed = g_heapUsed - oldSize + size;
+    if (g_heapUsed > g_heapPeak)
+        g_heapPeak = g_heapUsed;
+    return n + 1;
+}
+
+void* __wrap_calloc(size_t count, size_t size)
+{
+    if (size != 0 && count > static_cast<size_t>(-1) / size)
+        return nullptr;
+    void* p = __wrap_malloc(count * size);
+    if (p != nullptr)
+        std::memset(p, 0, count * size);
+    return p;
+}
+
+std::size_t nspire_heap_used() { return g_heapUsed; }
+std::size_t nspire_heap_peak() { return g_heapPeak; }
+unsigned nspire_heap_failures() { return g_heapFailures; }
+
 } // extern "C"
 
 #endif
