@@ -278,8 +278,6 @@ std::size_t heapPeakBytes()
 }
 
 unsigned heapFailures() { return 0; }
-void* gameStackTop() { return nullptr; }
-std::size_t gameStackUsedBytes() { return 0; }
 
 void log(const char* fmt, ...)
 {

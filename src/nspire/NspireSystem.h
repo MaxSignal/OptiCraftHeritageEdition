@@ -53,12 +53,6 @@ std::size_t heapUsedBytes();
 std::size_t heapPeakBytes();
 unsigned heapFailures();
 
-// The game's own stack on the calculator (see main_nspire.cpp): its top, or
-// null where the program keeps the stack it started with, and the deepest it
-// has been used so far in bytes (0 when not measured).
-void* gameStackTop();
-std::size_t gameStackUsedBytes();
-
 void log(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 [[noreturn]] void fatal(const std::string& message);
 }

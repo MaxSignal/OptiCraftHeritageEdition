@@ -62,7 +62,7 @@ void frameEnd(long long frameNs, long long, long long, int ticksThisFrame, int c
     const auto ms = [&](long long ns) { return g_frames ? ns / 1e6 / g_frames : 0.0; };
     const NglBackend::Stats stats = NglBackend::takeStats();
     NspireSystem::log("[stat] t=%lus fps=%.2f frame=%.0fms(max %.0f) tick=%.0f light=%.0f render=%.0f present=%.0f "
-                      "ticks=%d chunkupd=%d draws=%lu tris=%lu/%lu skip=%lu world=%d heap=%luK peak=%luK fail=%u stack=%luK mesh=%luK tex=%luK\n",
+                      "ticks=%d chunkupd=%d draws=%lu tris=%lu/%lu skip=%lu world=%d heap=%luK peak=%luK fail=%u mesh=%luK tex=%luK\n",
                       static_cast<unsigned long>(NspireSystem::micros() / 1000000u),
                       g_frames / seconds, ms(g_frameNs), g_worstFrameNs / 1e6, ms(g_tickNs), ms(g_lightingNs),
                       ms(g_renderNs), ms(g_displayNs), g_ticks, g_chunkUpdates,
@@ -70,7 +70,6 @@ void frameEnd(long long frameNs, long long, long long, int ticksThisFrame, int c
                       static_cast<unsigned long>(NspireSystem::heapUsedBytes() / 1024),
                       static_cast<unsigned long>(NspireSystem::heapPeakBytes() / 1024),
                       NspireSystem::heapFailures(),
-                      static_cast<unsigned long>(NspireSystem::gameStackUsedBytes() / 1024),
                       static_cast<unsigned long>(NglBackend::meshBytes() / 1024),
                       static_cast<unsigned long>(NglBackend::textureBytes() / 1024));
 

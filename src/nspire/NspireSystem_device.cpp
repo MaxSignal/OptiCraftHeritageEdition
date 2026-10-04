@@ -198,36 +198,6 @@ std::size_t heapUsedBytes() { return nspire_heap_used(); }
 std::size_t heapPeakBytes() { return nspire_heap_peak(); }
 unsigned heapFailures() { return nspire_heap_failures(); }
 
-constexpr std::size_t kGameStackBytes = 1024 * 1024;
-constexpr std::uint32_t kStackPaint = 0x5A17C0DEu;
-std::uint32_t* g_gameStack = nullptr;
-
-void* gameStackTop()
-{
-    // Allocated before anything else and never freed: the program returns
-    // through crt0, which restores the OS stack itself.
-    if (g_gameStack == nullptr)
-    {
-        g_gameStack = static_cast<std::uint32_t*>(std::malloc(kGameStackBytes));
-        if (g_gameStack == nullptr)
-            return nullptr;
-        for (std::size_t i = 0; i < kGameStackBytes / 4; ++i)
-            g_gameStack[i] = kStackPaint;
-    }
-    // 8-byte aligned, as the AAPCS requires at public interfaces.
-    return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(g_gameStack + kGameStackBytes / 4) & ~std::uintptr_t(7));
-}
-
-std::size_t gameStackUsedBytes()
-{
-    if (g_gameStack == nullptr)
-        return 0;
-    std::size_t untouched = 0;
-    while (untouched < kGameStackBytes / 4 && g_gameStack[untouched] == kStackPaint)
-        ++untouched;
-    return kGameStackBytes - untouched * 4;
-}
-
 long heapFreeKb()
 {
     // The OS heap has no query; Runtime falls back to a fixed budget.
