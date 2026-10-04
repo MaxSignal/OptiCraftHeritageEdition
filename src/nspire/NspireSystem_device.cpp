@@ -127,6 +127,9 @@ extern "C" int __wrap__gettimeofday(struct timeval* tv, void* tz)
     return 0;
 }
 
+extern "C" void* __real_malloc(size_t);
+extern "C" void __real_free(void*);
+
 namespace NspireSystem
 {
 void initialize(int argc, char** argv)
@@ -142,6 +145,17 @@ void initialize(int argc, char** argv)
     g_backBuffer = static_cast<std::uint16_t*>(std::calloc(kScreenWidth * kScreenHeight, sizeof(std::uint16_t)));
     if (g_backBuffer == nullptr)
         fatal("Out of memory allocating the framebuffer.");
+
+    // Where the loader put the program and what the OS heap returns, modulo 8:
+    // anything but 0 means 64-bit statics or unwrapped heap blocks would be
+    // read with misaligned LDRD (see the malloc wrapper).
+    static std::int64_t s_alignProbe = 0;
+    void* osBlock = __real_malloc(16);
+    log("[align] static %u, os malloc %u, game malloc %u\n",
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&s_alignProbe) & 7u),
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(osBlock) & 7u),
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(g_backBuffer) & 7u));
+    __real_free(osBlock);
 }
 
 void shutdown()

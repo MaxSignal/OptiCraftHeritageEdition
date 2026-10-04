@@ -126,6 +126,13 @@ else()
     target_link_libraries(OptiCraft PRIVATE z m)
     target_compile_options(OptiCraft PRIVATE
         -marm
+        # ARMv5T code tuned for the ARM926 (nspire-g++ passes -mcpu=arm926ej-s,
+        # i.e. v5TE): no LDRD/STRD. Those need doubleword-aligned addresses,
+        # which neither the OS heap nor the program loader promise, and a
+        # misaligned one returns a 64-bit value with its halves out of place.
+        -march=armv5t
+        -mtune=arm926ej-s
+        -Wno-psabi
         $<$<CONFIG:Release>:-O2>
         $<$<CONFIG:MinSizeRel>:-Os>
         -ffunction-sections

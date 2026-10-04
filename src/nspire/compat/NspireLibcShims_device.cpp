@@ -161,21 +161,32 @@ void* __real_realloc(void*, size_t);
 
 namespace
 {
+// Every block handed to the game is 8-byte aligned, whatever the OS heap
+// returns. The AAPCS promises that alignment, and GCC relies on it: int64_t
+// and double members are read and written with LDRD/STRD, which on the ARM9
+// need a doubleword-aligned address. The OS allocator only guarantees 4, and a
+// misaligned LDRD of WorldInfo::worldTime returned its two halves out of
+// place -- a random time of day every tick, i.e. the sky flashing between day
+// and night and the light level jumping with it.
 constexpr std::uint32_t kHeapMagic = 0x4E535048u; // "NSPH"
+constexpr std::size_t kAlign = 8;
 struct HeapHeader
 {
-    std::uint32_t magic;
+    std::uint32_t offset; // from the OS block to the user pointer
     std::uint32_t size;
+    std::uint32_t magic;  // last, right below the user pointer
 };
-static_assert(sizeof(HeapHeader) == 8, "keeps the 8-byte alignment malloc returns");
 
 std::size_t g_heapUsed = 0;
 std::size_t g_heapPeak = 0;
 unsigned g_heapFailures = 0;
+unsigned g_misalignedOsBlocks = 0;
 
 HeapHeader* headerOf(void* p)
 {
-    HeapHeader* h = static_cast<HeapHeader*>(p) - 1;
+    if ((reinterpret_cast<std::uintptr_t>(p) & (kAlign - 1)) != 0)
+        return nullptr;
+    HeapHeader* h = reinterpret_cast<HeapHeader*>(static_cast<unsigned char*>(p) - sizeof(HeapHeader));
     return h->magic == kHeapMagic ? h : nullptr;
 }
 
@@ -190,18 +201,28 @@ void noteFailure(size_t size)
 
 void* __wrap_malloc(size_t size)
 {
-    HeapHeader* h = static_cast<HeapHeader*>(__real_malloc(size + sizeof(HeapHeader)));
-    if (h == nullptr)
+    if (size > static_cast<size_t>(-1) - sizeof(HeapHeader) - kAlign)
     {
         noteFailure(size);
         return nullptr;
     }
-    h->magic = kHeapMagic;
+    unsigned char* raw = static_cast<unsigned char*>(__real_malloc(size + sizeof(HeapHeader) + kAlign - 1));
+    if (raw == nullptr)
+    {
+        noteFailure(size);
+        return nullptr;
+    }
+    if ((reinterpret_cast<std::uintptr_t>(raw) & (kAlign - 1)) != 0)
+        ++g_misalignedOsBlocks;
+    const std::uintptr_t user = (reinterpret_cast<std::uintptr_t>(raw) + sizeof(HeapHeader) + kAlign - 1) & ~(kAlign - 1);
+    HeapHeader* h = reinterpret_cast<HeapHeader*>(user - sizeof(HeapHeader));
+    h->offset = static_cast<std::uint32_t>(user - reinterpret_cast<std::uintptr_t>(raw));
     h->size = static_cast<std::uint32_t>(size);
+    h->magic = kHeapMagic;
     g_heapUsed += size;
     if (g_heapUsed > g_heapPeak)
         g_heapPeak = g_heapUsed;
-    return h + 1;
+    return reinterpret_cast<void*>(user);
 }
 
 void __wrap_free(void* p)
@@ -216,7 +237,7 @@ void __wrap_free(void* p)
     }
     g_heapUsed -= h->size;
     h->magic = 0;
-    __real_free(h);
+    __real_free(static_cast<unsigned char*>(p) - h->offset);
 }
 
 void* __wrap_realloc(void* p, size_t size)
@@ -231,18 +252,14 @@ void* __wrap_realloc(void* p, size_t size)
     HeapHeader* h = headerOf(p);
     if (h == nullptr)
         return __real_realloc(p, size);
-    const std::uint32_t oldSize = h->size;
-    HeapHeader* n = static_cast<HeapHeader*>(__real_realloc(h, size + sizeof(HeapHeader)));
+    // The OS realloc may move the block to a different alignment, so move it
+    // here instead.
+    void* n = __wrap_malloc(size);
     if (n == nullptr)
-    {
-        noteFailure(size);
         return nullptr;
-    }
-    n->size = static_cast<std::uint32_t>(size);
-    g_heapUsed = g_heapUsed - oldSize + size;
-    if (g_heapUsed > g_heapPeak)
-        g_heapPeak = g_heapUsed;
-    return n + 1;
+    std::memcpy(n, p, h->size < size ? h->size : size);
+    __wrap_free(p);
+    return n;
 }
 
 void* __wrap_calloc(size_t count, size_t size)
@@ -258,6 +275,7 @@ void* __wrap_calloc(size_t count, size_t size)
 std::size_t nspire_heap_used() { return g_heapUsed; }
 std::size_t nspire_heap_peak() { return g_heapPeak; }
 unsigned nspire_heap_failures() { return g_heapFailures; }
+unsigned nspire_heap_misaligned_os_blocks() { return g_misalignedOsBlocks; }
 
 } // extern "C"
 
