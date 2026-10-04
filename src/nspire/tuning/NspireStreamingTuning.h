@@ -133,7 +133,7 @@
 // direction, which is why faceCull= in the [WII][RAM] line reports how many
 // sub-lists were actually skipped -- if that number is small, this is overhead.
 #undef  PLATFORM_MESH_FACE_SORT
-#define PLATFORM_MESH_FACE_SORT                    0
+#define PLATFORM_MESH_FACE_SORT                    1
 
 #undef  PLATFORM_FACE_BUCKET_CULL
 #define PLATFORM_FACE_BUCKET_CULL                  0

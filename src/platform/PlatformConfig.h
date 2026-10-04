@@ -145,7 +145,7 @@
 #endif
 
 #ifndef PLATFORM_PROFILE_STREAMING
-#  define PLATFORM_PROFILE_STREAMING (PLATFORM_PS2 || PLATFORM_WII)
+#  define PLATFORM_PROFILE_STREAMING (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE)
 #endif
 
 // PS2 region files keep a whole-region write buffer, so a modified chunk can be
@@ -157,7 +157,7 @@
 #endif
 
 #ifndef PLATFORM_PROFILE_RENDER_PHASES
-#  define PLATFORM_PROFILE_RENDER_PHASES (PLATFORM_PS2 || PLATFORM_WII)
+#  define PLATFORM_PROFILE_RENDER_PHASES (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE)
 #endif
 
 // No threads at all (the Ndless toolchain builds libstdc++ without gthreads).
@@ -266,7 +266,7 @@
 // nextDouble() makes -- so switching the arithmetic here does not change how
 // many random numbers a feature consumes, and therefore cannot diverge a seed.
 #ifndef PLATFORM_FLOAT_FEATURE_GENERATION
-#  define PLATFORM_FLOAT_FEATURE_GENERATION (PLATFORM_CONSOLE_LOW || PLATFORM_PC_LEGACY)
+#  define PLATFORM_FLOAT_FEATURE_GENERATION (PLATFORM_CONSOLE_LOW || PLATFORM_PC_LEGACY || PLATFORM_NSPIRE)
 #endif
 
 // Bound the resident world to a fixed memory budget.

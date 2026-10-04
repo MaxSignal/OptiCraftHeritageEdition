@@ -876,7 +876,83 @@ struct StoredMesh
     RenderCapturedMesh mesh;
     float tx = 0.0f, ty = 0.0f, tz = 0.0f;
     bool translated = false;
+    // Terrain sections built with the face-direction sort (WiiMeshSort): quads
+    // grouped +X,-X,+Y,-Y,+Z,-Z,other, with each group's plane extent in
+    // section-local space and the section's world corner to bring the eye there.
+    bool hasGroups = false;
+    int groupQuads[RenderTerrainFaceGroups::kGroupCount] = {};
+    float planeMin[RenderTerrainFaceGroups::kGroupCount] = {};
+    float planeMax[RenderTerrainFaceGroups::kGroupCount] = {};
+    float origin[3] = {};
 };
+
+// Interpolated eye for the terrain pass (renderTerrainSetViewerPosition).
+bool g_eyeValid = false;
+float g_eye[3] = {};
+constexpr float kFaceCullMargin = 0.5f;
+
+// Draws the stored mesh, leaving out every face-direction group whose faces all
+// point away from the eye. Roughly half the opaque terrain never reaches the
+// vertex stage this way.
+bool drawStoredMesh(const StoredMesh& stored)
+{
+    if (!stored.hasGroups || !g_eyeValid)
+        return renderDrawCaptured(stored.mesh);
+
+    const float eye[3] = {g_eye[0] - stored.origin[0], g_eye[1] - stored.origin[1], g_eye[2] - stored.origin[2]};
+    RenderInterleavedMesh view;
+    view.data = stored.mesh.raw.data();
+    view.stride = stored.mesh.stride;
+    view.primitive = stored.mesh.primitive;
+    view.positionShort = stored.mesh.positionShort;
+    view.hasTexture = stored.mesh.hasTexture;
+    view.texCoordOffset = stored.mesh.texCoordOffset;
+    view.hasColor = stored.mesh.hasColor;
+    view.colorOffset = stored.mesh.colorOffset;
+    view.hasNormals = stored.mesh.hasNormals;
+    view.normalOffset = stored.mesh.normalOffset;
+    view.hasBrightness = stored.mesh.hasBrightness;
+    view.brightnessOffset = stored.mesh.brightnessOffset;
+
+    int quad = 0;
+    int runStart = -1;
+    bool drew = false;
+    const auto flush = [&](int end) {
+        if (runStart >= 0 && end > runStart)
+        {
+            view.first = runStart * 4;
+            view.count = (end - runStart) * 4;
+            drew |= drawMeshNow(view);
+        }
+        runStart = -1;
+    };
+    for (int g = 0; g < RenderTerrainFaceGroups::kGroupCount; ++g)
+    {
+        const int count = stored.groupQuads[g];
+        if (count <= 0)
+            continue;
+        bool visible = true;
+        if (g < RenderTerrainFaceGroups::kGroupCount - 1)
+        {
+            const int axis = g >> 1;
+            visible = (g & 1) == 0 ? eye[axis] + kFaceCullMargin > stored.planeMin[g]
+                                   : eye[axis] - kFaceCullMargin < stored.planeMax[g];
+        }
+        if (visible)
+        {
+            if (runStart < 0)
+                runStart = quad;
+        }
+        else
+        {
+            g_stats.trianglesSkipped += static_cast<unsigned long>(count) * 2u;
+            flush(quad);
+        }
+        quad += count;
+    }
+    flush(quad);
+    return drew || quad == 0;
+}
 
 std::unordered_map<int, StoredMesh> g_meshes;
 int g_nextMeshHandle = 1;
@@ -951,7 +1027,8 @@ void swapMeshes(int a, int b)
     std::swap(ia->second, ib->second);
 }
 
-bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float ty, float tz)
+bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float ty, float tz,
+                 const RenderTerrainCompileInfo* info)
 {
     auto it = g_meshes.find(handle);
     if (it == g_meshes.end())
@@ -969,6 +1046,22 @@ bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float 
     stored.ty = ty;
     stored.tz = tz;
     stored.translated = tx != 0.0f || ty != 0.0f || tz != 0.0f;
+    stored.hasGroups = false;
+    if (info != nullptr && info->faceGroups != nullptr && mesh.primitive == RenderPrimitive::Quads && mesh.first == 0)
+    {
+        int total = 0;
+        for (int g = 0; g < RenderTerrainFaceGroups::kGroupCount; ++g)
+        {
+            stored.groupQuads[g] = info->faceGroups->quadCount[g];
+            stored.planeMin[g] = info->faceGroups->planeMin[g];
+            stored.planeMax[g] = info->faceGroups->planeMax[g];
+            total += stored.groupQuads[g];
+        }
+        stored.origin[0] = info->worldOriginX;
+        stored.origin[1] = info->worldOriginY;
+        stored.origin[2] = info->worldOriginZ;
+        stored.hasGroups = total * 4 == mesh.count;
+    }
     return true;
 }
 
@@ -984,12 +1077,20 @@ bool drawMesh(int handle)
         g_state.matrixMode = 0;
         renderPushMatrix();
         renderTranslate(stored.tx, stored.ty, stored.tz);
-        renderDrawCaptured(stored.mesh);
+        drawStoredMesh(stored);
         renderPopMatrix();
         g_state.matrixMode = savedMode;
         return true;
     }
-    return renderDrawCaptured(stored.mesh);
+    return drawStoredMesh(stored);
+}
+
+void setViewer(double x, double y, double z)
+{
+    g_eye[0] = static_cast<float>(x);
+    g_eye[1] = static_cast<float>(y);
+    g_eye[2] = static_cast<float>(z);
+    g_eyeValid = true;
 }
 
 std::size_t meshBytes()
@@ -1502,12 +1603,12 @@ void renderDestroyPersistentMesh(int handle) { NglBackend::destroyMesh(handle); 
 
 bool renderCompilePersistentMesh(int handle, const RenderInterleavedMesh& mesh)
 {
-    return NglBackend::compileMesh(handle, mesh, 0.0f, 0.0f, 0.0f);
+    return NglBackend::compileMesh(handle, mesh, 0.0f, 0.0f, 0.0f, nullptr);
 }
 
 bool renderDrawPersistentMesh(int handle) { return NglBackend::drawMesh(handle); }
 
 bool renderCompileTerrainMesh(int handle, const RenderInterleavedMesh& mesh, const RenderTerrainCompileInfo& info)
 {
-    return NglBackend::compileMesh(handle, mesh, info.translateX, info.translateY, info.translateZ);
+    return NglBackend::compileMesh(handle, mesh, info.translateX, info.translateY, info.translateZ, &info);
 }

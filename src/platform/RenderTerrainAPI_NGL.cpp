@@ -22,7 +22,7 @@ bool renderTerrainAppendChunk(int handle)
 }
 void renderTerrainEndChunkBatch() {}
 void renderTerrainCaptureCamera() {}
-void renderTerrainSetViewerPosition(double, double, double) {}
+void renderTerrainSetViewerPosition(double x, double y, double z) { NglBackend::setViewer(x, y, z); }
 // Terrain fog is the regular fixed-function fog state, already set by the game.
 void renderTerrainSetFog(RenderFogMode, float, float, float, float, float, float, float) {}
 void renderTerrainSetEarlyDepth(bool) {}

@@ -26,7 +26,10 @@ int createMesh();
 void destroyMesh(int handle);
 void clearMesh(int handle);
 void swapMeshes(int a, int b);
-bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float ty, float tz);
+bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float ty, float tz,
+                 const RenderTerrainCompileInfo* info);
+// Eye position for face-direction culling of terrain sections.
+void setViewer(double x, double y, double z);
 bool drawMesh(int handle);
 std::size_t meshBytes();
 std::size_t textureBytes();
@@ -37,6 +40,7 @@ struct Stats
     unsigned long draws = 0;
     unsigned long trianglesSubmitted = 0;
     unsigned long trianglesDrawn = 0;
+    unsigned long trianglesSkipped = 0; // culled by face direction before the vertex stage
 };
 Stats takeStats();
 }

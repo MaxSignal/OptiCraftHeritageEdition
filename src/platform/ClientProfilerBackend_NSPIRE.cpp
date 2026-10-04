@@ -9,6 +9,8 @@
 // time goes (ticks / world+GUI render / present), how many frames and ticks ran,
 // how much the renderer drew, and the heap. It is the calculator's only
 // profiler, and the last lines before a hang say what the game was doing.
+void nspireProfileTakeTopPhases(char* out, std::size_t size, int top);
+
 namespace
 {
 constexpr long long kIntervalNs = 5000000000LL;
@@ -60,16 +62,21 @@ void frameEnd(long long frameNs, long long, long long, int ticksThisFrame, int c
     const auto ms = [&](long long ns) { return g_frames ? ns / 1e6 / g_frames : 0.0; };
     const NglBackend::Stats stats = NglBackend::takeStats();
     NspireSystem::log("[stat] t=%lus fps=%.2f frame=%.0fms(max %.0f) tick=%.0f light=%.0f render=%.0f present=%.0f "
-                      "ticks=%d chunkupd=%d draws=%lu tris=%lu/%lu world=%d heap=%luK peak=%luK fail=%u mesh=%luK tex=%luK\n",
+                      "ticks=%d chunkupd=%d draws=%lu tris=%lu/%lu skip=%lu world=%d heap=%luK peak=%luK fail=%u mesh=%luK tex=%luK\n",
                       static_cast<unsigned long>(NspireSystem::micros() / 1000000u),
                       g_frames / seconds, ms(g_frameNs), g_worstFrameNs / 1e6, ms(g_tickNs), ms(g_lightingNs),
                       ms(g_renderNs), ms(g_displayNs), g_ticks, g_chunkUpdates,
-                      stats.draws, stats.trianglesDrawn, stats.trianglesSubmitted, world != nullptr,
+                      stats.draws, stats.trianglesDrawn, stats.trianglesSubmitted, stats.trianglesSkipped, world != nullptr,
                       static_cast<unsigned long>(NspireSystem::heapUsedBytes() / 1024),
                       static_cast<unsigned long>(NspireSystem::heapPeakBytes() / 1024),
                       NspireSystem::heapFailures(),
                       static_cast<unsigned long>(NglBackend::meshBytes() / 1024),
                       static_cast<unsigned long>(NglBackend::textureBytes() / 1024));
+
+    char phases[256];
+    nspireProfileTakeTopPhases(phases, sizeof(phases), 8);
+    if (phases[0] != '\0')
+        NspireSystem::log("[phase] %s\n", phases);
 
     g_windowStartNs = now;
     g_tickNs = g_renderNs = g_displayNs = g_lightingNs = g_frameNs = g_worstFrameNs = 0;

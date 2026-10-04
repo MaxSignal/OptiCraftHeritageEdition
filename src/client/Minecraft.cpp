@@ -2529,6 +2529,9 @@ void Minecraft::changeWorld(World *world, const std::string &s, EntityPlayerSP *
     statFileWriter->prepareStatsForSync();
     if (!ps2MultiplayerExit)
         statFileWriter->syncStats();
+#if PLATFORM_NSPIRE
+    platformMemoryCheckpoint("changeWorld stats synced");
+#endif
     renderViewEntity = nullptr;
     loadingScreen->printText(s);
     loadingScreen->displayLoadingString("");
@@ -2537,6 +2540,9 @@ void Minecraft::changeWorld(World *world, const std::string &s, EntityPlayerSP *
 
     if (oldWorld != nullptr && !ps2MultiplayerExit)
         oldWorld->saveWorldIndirectly(loadingScreen);
+#if PLATFORM_NSPIRE
+    platformMemoryCheckpoint("changeWorld old world saved");
+#endif
 
     theWorld = world;
     if (renderEngine != nullptr && world == nullptr)
@@ -2554,10 +2560,16 @@ void Minecraft::changeWorld(World *world, const std::string &s, EntityPlayerSP *
     if (world != nullptr)
     {
         playerController->onWorldChanged(world);
+#if PLATFORM_NSPIRE
+        platformMemoryCheckpoint("changeWorld controller switched");
+#endif
         if (!isMultiplayerWorld())
         {
             if (entityplayer == nullptr)
                 thePlayer = (EntityPlayerSP *)world->findEntityByClass(typeid(EntityPlayerSP));
+#if PLATFORM_NSPIRE
+            platformMemoryCheckpoint("changeWorld player looked up");
+#endif
         }
         else if (thePlayer != nullptr)
         {
