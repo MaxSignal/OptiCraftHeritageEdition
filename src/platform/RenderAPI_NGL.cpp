@@ -32,6 +32,7 @@
 #include "gl.h"
 #include "nspire/NspireSystem.h"
 #include "nspire/render/NglBackend.h"
+#include "nspire/render/NglFixed.h"
 
 namespace
 {
@@ -236,28 +237,106 @@ void writeTexels(NglTexture& tex, int x0, int y0, int w, int h, const std::uint8
 // ---------------------------------------------------------------------------
 struct ClipVertex
 {
-    float x, y, z, w;   // clip space
-    float u, v;         // texel units
-    float fogZ;         // eye-space depth, for fog
-    int r, g, b, a;     // lit colour, 0..255
-    int fog;            // fog visibility 0..256 (256 = clear)
-    unsigned outcode;   // clip planes this vertex is outside of (bit per plane)
-    VERTEX screen;      // projected nGL vertex, valid when outcode == 0
+    std::int32_t x, y, z, w; // clip space, Q12
+    std::int32_t u, v;       // texel units, Q8
+    int r, g, b, a;          // lit colour, 0..255
+    int fog;                 // fog visibility 0..256 (256 = clear)
+    unsigned outcode;        // clip planes this vertex is outside of (bit per plane)
+    VERTEX screen;           // projected nGL vertex, valid when outcode == 0
 };
+
+// A matrix in fixed point: the three linear columns and the bottom row in Q16,
+// the translation column (rows 0-2) in Q12, which keeps a range of +-500k
+// blocks there while rotations and scales keep 16 fractional bits.
+struct FixedMatrix
+{
+    std::int32_t m[16];
+};
+
+constexpr int fixedFormat(int index)
+{
+    return (index >= 12 && index < 15) ? NglFixed::kPosShift : NglFixed::kMatShift;
+}
+
+FixedMatrix toFixed(const Mat4& a)
+{
+    FixedMatrix r;
+    for (int i = 0; i < 16; ++i)
+        r.m[i] = NglFixed::fromFloat(a.m[i], fixedFormat(i));
+    return r;
+}
+
+// a * b, column-major, every term rescaled to the result entry's format.
+FixedMatrix multiply(const FixedMatrix& a, const FixedMatrix& b)
+{
+    FixedMatrix r;
+    for (int c = 0; c < 4; ++c)
+        for (int row = 0; row < 4; ++row)
+        {
+            const int target = fixedFormat(c * 4 + row);
+            std::int64_t sum = 0;
+            for (int k = 0; k < 4; ++k)
+            {
+                const int shift = fixedFormat(k * 4 + row) + fixedFormat(c * 4 + k) - target;
+                sum += (static_cast<std::int64_t>(a.m[k * 4 + row]) * b.m[c * 4 + k]) >> shift;
+            }
+            r.m[c * 4 + row] = static_cast<std::int32_t>(sum);
+        }
+    return r;
+}
+
+// m * translate(t), t in Q12: only the translation column changes.
+void translateFixed(FixedMatrix& m, const std::int32_t t[3])
+{
+    for (int row = 0; row < 4; ++row)
+    {
+        const std::int64_t d = static_cast<std::int64_t>(m.m[row]) * t[0] +
+                               static_cast<std::int64_t>(m.m[4 + row]) * t[1] +
+                               static_cast<std::int64_t>(m.m[8 + row]) * t[2];
+        // Linear terms are Q16 * Q12 = Q28: Q12 for rows 0-2, Q16 for row 3.
+        m.m[12 + row] += static_cast<std::int32_t>(d >> (row < 3 ? 16 : 12));
+    }
+}
+
+// Fixed-point copies of the modelview, projection and their product, rebuilt
+// only when the game changed a matrix since the last draw.
+unsigned g_matrixSerial[4] = {1, 1, 1, 1};
+struct MatrixCache
+{
+    unsigned mvSerial = 0, projSerial = 0;
+    FixedMatrix mv, proj, mvp;
+} g_matrixCache;
+
+void bumpCurrentMatrix() { ++g_matrixSerial[currentStackIndex()]; }
 
 struct DrawSetup
 {
-    Mat4 modelView;
-    Mat4 mvp;
+    FixedMatrix mv;
+    FixedMatrix mvp;
     const NglTexture* texture = nullptr;
     const NglTexture* lightmap = nullptr;
     bool textureMatrix = false;
-    Mat4 texMatrix;
+    std::int32_t texMatrix[6] = {}; // s' = m0 s + m2 t + m4, t' = m1 s + m3 t + m5 (Q16)
     int color[4] = {255, 255, 255, 255}; // current colour, 0..255
-    // Lighting in eye space, set up once per draw (entities and items only).
-    float lightDir[2][3] = {};
-    float lightDiffuse[2][3] = {};
-    float ambient[3] = {};
+    int lightmapS = 240, lightmapT = 240;
+    // Fog, per draw.
+    bool fog = false;
+    RenderFogMode fogMode = RenderFogMode::Exp;
+    std::int32_t fogEnd = 0;               // Q12
+    NglFixed::Reciprocal fogInvSpan{1, 0}; // 1 / (end - start)
+    bool fogSpanValid = false;
+    std::int32_t fogDensity = 0;           // Q16
+    int fogColor[3] = {0, 0, 0};           // 0..255
+    // Lighting in eye space (entities and items only).
+    bool lighting = false;
+    std::int32_t lightDir[2][3] = {};      // Q14 unit vectors
+    std::int32_t lightDiffuse[2][3] = {};  // Q8
+    std::int32_t ambient[3] = {};          // Q8
+    bool lightOn[2] = {false, false};
+    int constantLit[3] = {256, 256, 256};  // for meshes without per-vertex normals
+    int texWidth = 0, texHeight = 0;
+    int viewport[4] = {0, 0, 0, 0};
+    std::int32_t depthOffset = 0;          // Q8, polygon offset
 };
 
 std::vector<ClipVertex> g_vertexScratch;
@@ -274,7 +353,7 @@ int clamp255(int v)
 
 int toByte(float v)
 {
-    return clamp255(static_cast<int>(v * 255.0f + 0.5f));
+    return clamp255((NglFixed::fromFloat(v, 8) * 255 + 128) >> 8);
 }
 
 // The 1.2.5 lightmap: unit 1 samples the 16x16 light texture at (block light,
@@ -290,123 +369,189 @@ const std::uint8_t* lightmapTexel(const NglTexture* lightmap, int s, int t)
     return &lightmap->rgba[(static_cast<std::size_t>(sky) * lightmap->width + block) * 4];
 }
 
-constexpr float kGuardBand = 2.0f;
+constexpr int kGuardBand = 2;
 
-unsigned computeOutcode(float x, float y, float z, float w)
+unsigned computeOutcode(std::int32_t x, std::int32_t y, std::int32_t z, std::int32_t w)
 {
     unsigned code = 0;
-    if (z + w < 0.0f) code |= 1u;                 // near
-    if (w - z < 0.0f) code |= 2u;                 // far
-    const float gw = kGuardBand * w;
-    if (gw + x < 0.0f) code |= 4u;                // left (guard band)
-    if (gw - x < 0.0f) code |= 8u;                // right
-    if (gw + y < 0.0f) code |= 16u;               // bottom
-    if (gw - y < 0.0f) code |= 32u;               // top
+    if (z + w < 0) code |= 1u;                    // near
+    if (w - z < 0) code |= 2u;                    // far
+    const std::int32_t gw = kGuardBand * w;
+    if (gw + x < 0) code |= 4u;                   // left (guard band)
+    if (gw - x < 0) code |= 8u;                   // right
+    if (gw + y < 0) code |= 16u;                  // bottom
+    if (gw - y < 0) code |= 32u;                  // top
     return code;
 }
 
-int fogVisibility256(float distance)
+int fogVisibility256(const DrawSetup& setup, std::int32_t distance)
 {
-    float vis;
-    switch (g_state.fogMode)
+    int v;
+    switch (setup.fogMode)
     {
     case RenderFogMode::Linear:
-    {
-        const float span = g_state.fogEnd - g_state.fogStart;
-        vis = span <= 0.0f ? 1.0f : (g_state.fogEnd - distance) / span;
+        v = setup.fogSpanValid ? NglFixed::mulReciprocal(setup.fogEnd - distance, setup.fogInvSpan, 8) : 256;
         break;
-    }
     case RenderFogMode::Exp2:
     {
-        const float d = g_state.fogDensity * distance;
-        vis = std::exp(-d * d);
+        const std::int32_t d = NglFixed::mulShift(setup.fogDensity, distance, 16);
+        v = NglFixed::expNeg256(d > (64 << 12) ? (64 << 12) : NglFixed::mulShift(d, d, 12));
         break;
     }
     default:
-        vis = std::exp(-g_state.fogDensity * distance);
+        v = NglFixed::expNeg256(NglFixed::mulShift(setup.fogDensity, distance, 16));
         break;
     }
-    const int v = static_cast<int>(vis * 256.0f);
     return v < 0 ? 0 : (v > 256 ? 256 : v);
 }
 
-VERTEX project(const ClipVertex& c)
+VERTEX project(const DrawSetup& setup, const ClipVertex& c)
 {
-    const float invW = 1.0f / c.w;
-    const int* vp = g_state.viewport;
-    const float sx = vp[0] + (c.x * invW * 0.5f + 0.5f) * vp[2];
-    const float sy = static_cast<float>(NspireSystem::kScreenHeight) - (vp[1] + (c.y * invW * 0.5f + 0.5f) * vp[3]);
-    float depth = clamp01(c.z * invW * 0.5f + 0.5f);
-    float zb = 32.0f + depth * 65000.0f;
-    if (g_state.polygonOffset)
-        zb += g_state.polygonOffsetUnits * 8.0f;
-    if (zb < 26.0f)
-        zb = 26.0f;
-    return VERTEX(GLFix(sx), GLFix(sy), GLFix(zb), GLFix(c.u), GLFix(c.v), 0);
+    const NglFixed::Reciprocal rw = NglFixed::reciprocal(c.w);
+    const std::int32_t ndcX = NglFixed::mulReciprocal(c.x, rw, 16);
+    const std::int32_t ndcY = NglFixed::mulReciprocal(c.y, rw, 16);
+    const std::int32_t ndcZ = NglFixed::mulReciprocal(c.z, rw, 16);
+    const int* vp = setup.viewport;
+    VERTEX out;
+    out.x.value = (vp[0] << 8) + static_cast<std::int32_t>((static_cast<std::int64_t>(ndcX + 65536) * vp[2]) >> 9);
+    out.y.value = ((NspireSystem::kScreenHeight - vp[1]) << 8) -
+                  static_cast<std::int32_t>((static_cast<std::int64_t>(ndcY + 65536) * vp[3]) >> 9);
+    std::int32_t depth = (ndcZ + 65536) >> 1; // 0..1 in Q16
+    depth = depth < 0 ? 0 : (depth > 65536 ? 65536 : depth);
+    std::int32_t zb = (32 << 8) + static_cast<std::int32_t>((static_cast<std::int64_t>(depth) * 65000) >> 8) + setup.depthOffset;
+    if (zb < (26 << 8))
+        zb = 26 << 8;
+    out.z.value = zb;
+    out.u.value = c.u;
+    out.v.value = c.v;
+    out.c = 0;
+    return out;
 }
 
-void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, const std::uint8_t* base, ClipVertex& out)
+// Lighting factor per colour channel, 0..256: ambient + sum(diffuse * N.L)
+// for a normal already in eye space (Q14, not necessarily unit length).
+void lightFactors(const DrawSetup& setup, const std::int32_t en[3], int lit[3])
 {
-    float px, py, pz;
+    const std::uint64_t len2 = static_cast<std::uint64_t>(static_cast<std::int64_t>(en[0]) * en[0] +
+                                                         static_cast<std::int64_t>(en[1]) * en[1] +
+                                                         static_cast<std::int64_t>(en[2]) * en[2]);
+    std::int32_t n[3] = {0, 0, 0};
+    if (const std::uint32_t len = NglFixed::isqrt(len2))
+    {
+        const NglFixed::Reciprocal rl = NglFixed::reciprocal(static_cast<std::int32_t>(len));
+        for (int i = 0; i < 3; ++i)
+            n[i] = NglFixed::mulReciprocal(en[i], rl, 14);
+    }
+    std::int32_t acc[3] = {setup.ambient[0], setup.ambient[1], setup.ambient[2]};
+    for (int i = 0; i < 2; ++i)
+    {
+        if (!setup.lightOn[i])
+            continue;
+        const std::int32_t d = (n[0] * setup.lightDir[i][0] + n[1] * setup.lightDir[i][1] + n[2] * setup.lightDir[i][2]) >> 20;
+        if (d <= 0)
+            continue; // d is N.L in Q8
+        for (int c = 0; c < 3; ++c)
+            acc[c] += (setup.lightDiffuse[i][c] * d) >> 8;
+    }
+    for (int c = 0; c < 3; ++c)
+        lit[c] = acc[c] < 0 ? 0 : (acc[c] > 256 ? 256 : acc[c]);
+}
+
+void eyeNormal(const DrawSetup& setup, const std::int32_t n[3], std::int32_t en[3])
+{
+    // Q16 matrix * Q7 normal = Q23; keep Q14.
+    const std::int32_t* m = setup.mv.m;
+    for (int r = 0; r < 3; ++r)
+        en[r] = static_cast<std::int32_t>((static_cast<std::int64_t>(m[r]) * n[0] + static_cast<std::int64_t>(m[4 + r]) * n[1] +
+                                           static_cast<std::int64_t>(m[8 + r]) * n[2]) >> 9);
+}
+
+// `fixedData`: the vertex comes from a mesh this backend captured, whose
+// positions are already Q12 and texture coordinates Q16 (see
+// renderCaptureInterleaved); otherwise they are the Tessellator's floats.
+void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, const std::uint8_t* base, bool fixedData,
+                   ClipVertex& out)
+{
+    std::int32_t px, py, pz;
     if (mesh.positionShort)
     {
         const std::int16_t* s = reinterpret_cast<const std::int16_t*>(base);
-        px = s[0];
-        py = s[1];
-        pz = s[2];
+        px = s[0] << NglFixed::kPosShift;
+        py = s[1] << NglFixed::kPosShift;
+        pz = s[2] << NglFixed::kPosShift;
+    }
+    else if (fixedData)
+    {
+        const std::int32_t* p = reinterpret_cast<const std::int32_t*>(base);
+        px = p[0];
+        py = p[1];
+        pz = p[2];
     }
     else
     {
         const float* f = reinterpret_cast<const float*>(base);
-        px = f[0];
-        py = f[1];
-        pz = f[2];
+        px = NglFixed::fromFloat(f[0], NglFixed::kPosShift);
+        py = NglFixed::fromFloat(f[1], NglFixed::kPosShift);
+        pz = NglFixed::fromFloat(f[2], NglFixed::kPosShift);
     }
 
-    const float* m = setup.mvp.m;
-    out.x = m[0] * px + m[4] * py + m[8] * pz + m[12];
-    out.y = m[1] * px + m[5] * py + m[9] * pz + m[13];
-    out.z = m[2] * px + m[6] * py + m[10] * pz + m[14];
-    out.w = m[3] * px + m[7] * py + m[11] * pz + m[15];
+    // Q16 matrix * Q12 position = Q28; >> 16 gives Q12 clip coordinates.
+    const std::int32_t* m = setup.mvp.m;
+    out.x = static_cast<std::int32_t>((static_cast<std::int64_t>(m[0]) * px + static_cast<std::int64_t>(m[4]) * py +
+                                       static_cast<std::int64_t>(m[8]) * pz) >> 16) + m[12];
+    out.y = static_cast<std::int32_t>((static_cast<std::int64_t>(m[1]) * px + static_cast<std::int64_t>(m[5]) * py +
+                                       static_cast<std::int64_t>(m[9]) * pz) >> 16) + m[13];
+    out.z = static_cast<std::int32_t>((static_cast<std::int64_t>(m[2]) * px + static_cast<std::int64_t>(m[6]) * py +
+                                       static_cast<std::int64_t>(m[10]) * pz) >> 16) + m[14];
+    out.w = static_cast<std::int32_t>((static_cast<std::int64_t>(m[3]) * px + static_cast<std::int64_t>(m[7]) * py +
+                                       static_cast<std::int64_t>(m[11]) * pz) >> 16) + (m[15] >> 4);
 
-    const float* mv = setup.modelView.m;
-    if (g_state.fog)
+    if (setup.fog)
     {
         // Eye-plane distance (GL's default fog coordinate), not the radial
         // distance: three multiplies instead of nine and a square root.
-        const float ez = mv[2] * px + mv[6] * py + mv[10] * pz + mv[14];
-        out.fogZ = ez < 0.0f ? -ez : ez;
-        out.fog = fogVisibility256(out.fogZ);
+        const std::int32_t* mv = setup.mv.m;
+        std::int32_t ez = static_cast<std::int32_t>((static_cast<std::int64_t>(mv[2]) * px + static_cast<std::int64_t>(mv[6]) * py +
+                                                     static_cast<std::int64_t>(mv[10]) * pz) >> 16) + mv[14];
+        if (ez < 0)
+            ez = -ez;
+        out.fog = fogVisibility256(setup, ez);
     }
     else
-    {
-        out.fogZ = 0.0f;
         out.fog = 256;
-    }
 
-    // Texture coordinates, in texels of level 0.
+    // Texture coordinates, in texels of level 0 (Q8).
     if (setup.texture != nullptr)
     {
-        float s = 0.0f, t = 0.0f;
+        std::int32_t s = 0, t = 0; // Q16
         if (mesh.hasTexture)
         {
-            const float* uv = reinterpret_cast<const float*>(base + mesh.texCoordOffset);
-            s = uv[0];
-            t = uv[1];
+            if (fixedData)
+            {
+                const std::int32_t* uv = reinterpret_cast<const std::int32_t*>(base + mesh.texCoordOffset);
+                s = uv[0];
+                t = uv[1];
+            }
+            else
+            {
+                const float* uv = reinterpret_cast<const float*>(base + mesh.texCoordOffset);
+                s = NglFixed::fromFloat(uv[0], 16);
+                t = NglFixed::fromFloat(uv[1], 16);
+            }
         }
         if (setup.textureMatrix)
         {
-            const float* tm = setup.texMatrix.m;
-            const float ns = tm[0] * s + tm[4] * t + tm[12];
-            const float nt = tm[1] * s + tm[5] * t + tm[13];
+            const std::int32_t* tm = setup.texMatrix;
+            const std::int32_t ns = NglFixed::mulShift(tm[0], s, 16) + NglFixed::mulShift(tm[2], t, 16) + tm[4];
+            const std::int32_t nt = NglFixed::mulShift(tm[1], s, 16) + NglFixed::mulShift(tm[3], t, 16) + tm[5];
             s = ns;
             t = nt;
         }
-        out.u = s * setup.texture->width;
-        out.v = t * setup.texture->height;
+        out.u = static_cast<std::int32_t>((static_cast<std::int64_t>(s) * setup.texWidth) >> 8);
+        out.v = static_cast<std::int32_t>((static_cast<std::int64_t>(t) * setup.texHeight) >> 8);
     }
     else
-        out.u = out.v = 0.0f;
+        out.u = out.v = 0;
 
     // Colour, in integers: vertex colour or current colour.
     if (mesh.hasColor)
@@ -427,47 +572,25 @@ void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, co
 
     // Fixed-function lighting: Minecraft's two directional "standard item"
     // lights with colour material, i.e. colour * (ambient + sum(diffuse*N.L)).
-    if (g_state.lighting)
+    if (setup.lighting)
     {
-        float n[3] = {g_state.normal[0], g_state.normal[1], g_state.normal[2]};
+        int lit[3] = {setup.constantLit[0], setup.constantLit[1], setup.constantLit[2]};
         if (mesh.hasNormals)
         {
             const std::int8_t* nb = reinterpret_cast<const std::int8_t*>(base + mesh.normalOffset);
-            n[0] = nb[0] * (1.0f / 127.0f);
-            n[1] = nb[1] * (1.0f / 127.0f);
-            n[2] = nb[2] * (1.0f / 127.0f);
+            const std::int32_t n[3] = {nb[0], nb[1], nb[2]};
+            std::int32_t en[3];
+            eyeNormal(setup, n, en);
+            lightFactors(setup, en, lit);
         }
-        float en[3] = {
-            mv[0] * n[0] + mv[4] * n[1] + mv[8] * n[2],
-            mv[1] * n[0] + mv[5] * n[1] + mv[9] * n[2],
-            mv[2] * n[0] + mv[6] * n[1] + mv[10] * n[2],
-        };
-        const float len2 = en[0] * en[0] + en[1] * en[1] + en[2] * en[2];
-        if (len2 > 1e-12f)
-        {
-            const float inv = 1.0f / std::sqrt(len2);
-            en[0] *= inv;
-            en[1] *= inv;
-            en[2] *= inv;
-        }
-        float lit[3] = {setup.ambient[0], setup.ambient[1], setup.ambient[2]};
-        for (int i = 0; i < 2; ++i)
-        {
-            if (!g_state.light[i])
-                continue;
-            const float d = std::max(0.0f, en[0] * setup.lightDir[i][0] + en[1] * setup.lightDir[i][1] +
-                                               en[2] * setup.lightDir[i][2]);
-            for (int c = 0; c < 3; ++c)
-                lit[c] += setup.lightDiffuse[i][c] * d;
-        }
-        out.r = (out.r * toByte(lit[0])) / 255;
-        out.g = (out.g * toByte(lit[1])) / 255;
-        out.b = (out.b * toByte(lit[2])) / 255;
+        out.r = (out.r * lit[0]) >> 8;
+        out.g = (out.g * lit[1]) >> 8;
+        out.b = (out.b * lit[2]) >> 8;
     }
 
     if (setup.lightmap != nullptr)
     {
-        int s = static_cast<int>(g_state.lightmapCoord[0]), t = static_cast<int>(g_state.lightmapCoord[1]);
+        int s = setup.lightmapS, t = setup.lightmapT;
         if (mesh.hasBrightness)
         {
             const std::uint32_t b = *reinterpret_cast<const std::uint32_t*>(base + mesh.brightnessOffset);
@@ -484,26 +607,30 @@ void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, co
 
     out.outcode = computeOutcode(out.x, out.y, out.z, out.w);
     if (out.outcode == 0)
-        out.screen = project(out);
+        out.screen = project(setup, out);
 }
 
 // ---------------------------------------------------------------------------
 // Clipping and rasterisation
 // ---------------------------------------------------------------------------
-ClipVertex lerpVertex(const ClipVertex& a, const ClipVertex& b, float t)
+// t in Q16.
+ClipVertex lerpVertex(const ClipVertex& a, const ClipVertex& b, std::int32_t t)
 {
+    const auto lerp = [t](std::int32_t from, std::int32_t to) {
+        return from + static_cast<std::int32_t>((static_cast<std::int64_t>(to - from) * t) >> 16);
+    };
     ClipVertex r = a;
-    r.x = a.x + (b.x - a.x) * t;
-    r.y = a.y + (b.y - a.y) * t;
-    r.z = a.z + (b.z - a.z) * t;
-    r.w = a.w + (b.w - a.w) * t;
-    r.u = a.u + (b.u - a.u) * t;
-    r.v = a.v + (b.v - a.v) * t;
+    r.x = lerp(a.x, b.x);
+    r.y = lerp(a.y, b.y);
+    r.z = lerp(a.z, b.z);
+    r.w = lerp(a.w, b.w);
+    r.u = lerp(a.u, b.u);
+    r.v = lerp(a.v, b.v);
     return r;
 }
 
 // Signed distance of a vertex to one clip plane; >= 0 is inside.
-float planeDistance(const ClipVertex& v, int plane)
+std::int32_t planeDistance(const ClipVertex& v, int plane)
 {
     switch (plane)
     {
@@ -529,12 +656,15 @@ int clipPolygon(ClipVertex* poly, int count, ClipVertex* scratch, unsigned plane
         {
             const ClipVertex& a = in[i];
             const ClipVertex& b = in[(i + 1) % count];
-            const float da = planeDistance(a, plane);
-            const float db = planeDistance(b, plane);
-            if (da >= 0.0f)
+            const std::int32_t da = planeDistance(a, plane);
+            const std::int32_t db = planeDistance(b, plane);
+            if (da >= 0)
                 out[outCount++] = a;
-            if ((da >= 0.0f) != (db >= 0.0f))
-                out[outCount++] = lerpVertex(a, b, da / (da - db));
+            if ((da >= 0) != (db >= 0))
+            {
+                const std::int32_t t = static_cast<std::int32_t>((static_cast<std::int64_t>(da) << 16) / (da - db));
+                out[outCount++] = lerpVertex(a, b, t);
+            }
         }
         std::swap(in, out);
         count = outCount;
@@ -613,7 +743,7 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
         return;
 
     COLOR fogAdd = 0;
-    if (g_state.fog)
+    if (setup.fog)
     {
         const int vis = (v0.fog + v1.fog + v2.fog) / 3;
         const int f = 256 - vis;
@@ -621,8 +751,7 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
         g = (g * vis) >> 8;
         b = (b * vis) >> 8;
         if (f > 5)
-            fogAdd = color565(toByte(g_state.fogColor[0]) * f >> 8, toByte(g_state.fogColor[1]) * f >> 8,
-                              toByte(g_state.fogColor[2]) * f >> 8);
+            fogAdd = color565(setup.fogColor[0] * f >> 8, setup.fogColor[1] * f >> 8, setup.fogColor[2] * f >> 8);
     }
 
     const bool textured = setup.texture != nullptr;
@@ -655,7 +784,7 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
         if (count < 3)
             return;
         for (int i = 0; i < count; ++i)
-            nv[i] = project(poly[i]);
+            nv[i] = project(setup, poly[i]);
     }
 
     if (culled(screenArea(nv[0], nv[1], nv[2])))
@@ -671,7 +800,7 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
         nglDrawTriangleZClipped(&nv[0], &nv[i], &nv[i + 1]);
 }
 
-void drawLine(const ClipVertex& a, const ClipVertex& b)
+void drawLine(const DrawSetup& setup, const ClipVertex& a, const ClipVertex& b)
 {
     if ((a.outcode & b.outcode) != 0)
         return;
@@ -681,8 +810,8 @@ void drawLine(const ClipVertex& a, const ClipVertex& b)
     const int count = clipPolygon(poly, 3, scratch, a.outcode | b.outcode);
     if (count < 2)
         return;
-    const VERTEX s0 = project(poly[0]);
-    const VERTEX s1 = project(poly[count - 1]);
+    const VERTEX s0 = project(setup, poly[0]);
+    const VERTEX s1 = project(setup, poly[count - 1]);
     const COLOR c = color565(a.r, a.g, a.b);
     COLOR* fb = NspireSystem::backBuffer();
     const int x0 = s0.x.toInteger<int>(), y0 = s0.y.toInteger<int>();
@@ -703,6 +832,12 @@ void drawLine(const ClipVertex& a, const ClipVertex& b)
     }
 }
 
+// Translation applied on top of the modelview for the stored mesh being drawn
+// (terrain sections), in Q12, so drawing a section never touches the float
+// matrix stack.
+bool g_meshTranslate = false;
+std::int32_t g_meshTranslation[3] = {};
+
 bool prepareDraw(DrawSetup& setup)
 {
     if (!g_initialized)
@@ -712,14 +847,38 @@ bool prepareDraw(DrawSetup& setup)
     if (!g_state.colorMask && !g_state.depthMask)
         return false;
 
-    setup.modelView = g_state.stacks[0].back();
-    setup.mvp = multiply(g_state.stacks[1].back(), setup.modelView);
+    MatrixCache& cache = g_matrixCache;
+    const bool mvChanged = cache.mvSerial != g_matrixSerial[0];
+    const bool projChanged = cache.projSerial != g_matrixSerial[1];
+    if (mvChanged)
+        cache.mv = toFixed(g_state.stacks[0].back());
+    if (projChanged)
+        cache.proj = toFixed(g_state.stacks[1].back());
+    if (mvChanged || projChanged)
+    {
+        cache.mvp = multiply(cache.proj, cache.mv);
+        cache.mvSerial = g_matrixSerial[0];
+        cache.projSerial = g_matrixSerial[1];
+    }
+    setup.mv = cache.mv;
+    setup.mvp = cache.mvp;
+    if (g_meshTranslate)
+    {
+        translateFixed(setup.mv, g_meshTranslation);
+        translateFixed(setup.mvp, g_meshTranslation);
+    }
+
     setup.texture = nullptr;
     if (g_state.texture2d[0])
     {
         const NglTexture* tex = findTexture(g_state.boundTexture[0]);
         if (tex != nullptr && !tex->pixels.empty())
             setup.texture = tex;
+    }
+    if (setup.texture != nullptr)
+    {
+        setup.texWidth = setup.texture->width;
+        setup.texHeight = setup.texture->height;
     }
     setup.lightmap = nullptr;
     if (g_state.texture2d[1])
@@ -728,21 +887,64 @@ bool prepareDraw(DrawSetup& setup)
         if (lm != nullptr && !lm->rgba.empty())
             setup.lightmap = lm;
     }
-    setup.texMatrix = g_state.stacks[2].back();
-    setup.textureMatrix = !isIdentity(setup.texMatrix);
+    const Mat4& tm = g_state.stacks[2].back();
+    setup.textureMatrix = !isIdentity(tm);
+    if (setup.textureMatrix)
+    {
+        setup.texMatrix[0] = NglFixed::fromFloat(tm.m[0], 16);
+        setup.texMatrix[1] = NglFixed::fromFloat(tm.m[1], 16);
+        setup.texMatrix[2] = NglFixed::fromFloat(tm.m[4], 16);
+        setup.texMatrix[3] = NglFixed::fromFloat(tm.m[5], 16);
+        setup.texMatrix[4] = NglFixed::fromFloat(tm.m[12], 16);
+        setup.texMatrix[5] = NglFixed::fromFloat(tm.m[13], 16);
+    }
     for (int i = 0; i < 4; ++i)
         setup.color[i] = toByte(g_state.color[i]);
-    if (g_state.lighting)
+    setup.lightmapS = NglFixed::fromFloat(g_state.lightmapCoord[0], 0);
+    setup.lightmapT = NglFixed::fromFloat(g_state.lightmapCoord[1], 0);
+    std::copy(g_state.viewport, g_state.viewport + 4, setup.viewport);
+    setup.depthOffset = g_state.polygonOffset ? NglFixed::fromFloat(g_state.polygonOffsetUnits, 8) * 8 : 0;
+
+    setup.fog = g_state.fog;
+    if (setup.fog)
+    {
+        setup.fogMode = g_state.fogMode;
+        const std::int32_t start = NglFixed::fromFloat(g_state.fogStart, NglFixed::kPosShift);
+        setup.fogEnd = NglFixed::fromFloat(g_state.fogEnd, NglFixed::kPosShift);
+        setup.fogSpanValid = setup.fogEnd > start;
+        if (setup.fogSpanValid)
+            setup.fogInvSpan = NglFixed::reciprocal(setup.fogEnd - start);
+        setup.fogDensity = NglFixed::fromFloat(g_state.fogDensity, 16);
+        for (int c = 0; c < 3; ++c)
+            setup.fogColor[c] = toByte(g_state.fogColor[c]);
+    }
+
+    setup.lighting = g_state.lighting;
+    if (setup.lighting)
     {
         for (int c = 0; c < 3; ++c)
-            setup.ambient[c] = g_state.lightModelAmbient[c] + g_state.lights[0].ambient[c] * g_state.light[0] +
-                               g_state.lights[1].ambient[c] * g_state.light[1];
+        {
+            std::int32_t a = NglFixed::fromFloat(g_state.lightModelAmbient[c], 8);
+            for (int i = 0; i < 2; ++i)
+                if (g_state.light[i])
+                    a += NglFixed::fromFloat(g_state.lights[i].ambient[c], 8);
+            setup.ambient[c] = a;
+        }
         for (int i = 0; i < 2; ++i)
+        {
+            setup.lightOn[i] = g_state.light[i];
             for (int c = 0; c < 3; ++c)
             {
-                setup.lightDir[i][c] = g_state.lights[i].dir[c];
-                setup.lightDiffuse[i][c] = g_state.lights[i].diffuse[c];
+                setup.lightDir[i][c] = NglFixed::fromFloat(g_state.lights[i].dir[c], 14);
+                setup.lightDiffuse[i][c] = NglFixed::fromFloat(g_state.lights[i].diffuse[c], 8);
             }
+        }
+        // GL's current normal, for meshes without their own: lit once per draw.
+        const std::int32_t n[3] = {NglFixed::fromFloat(g_state.normal[0], 7), NglFixed::fromFloat(g_state.normal[1], 7),
+                                   NglFixed::fromFloat(g_state.normal[2], 7)};
+        std::int32_t en[3];
+        eyeNormal(setup, n, en);
+        lightFactors(setup, en, setup.constantLit);
     }
 
     glBindTexture(setup.texture ? &setup.texture->desc : nullptr);
@@ -758,7 +960,7 @@ void finishDraw()
     ngl_raster = NGLRasterState();
 }
 
-bool drawMeshNow(const RenderInterleavedMesh& mesh)
+bool drawMeshNow(const RenderInterleavedMesh& mesh, bool fixedData = false)
 {
     if (mesh.data == nullptr || mesh.stride <= 0 || mesh.count <= 0)
         return false;
@@ -774,7 +976,7 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh)
                                static_cast<std::size_t>(mesh.first) * mesh.stride;
     g_vertexScratch.resize(static_cast<std::size_t>(mesh.count));
     for (int i = 0; i < mesh.count; ++i)
-        processVertex(setup, mesh, base + static_cast<std::size_t>(i) * mesh.stride, g_vertexScratch[i]);
+        processVertex(setup, mesh, base + static_cast<std::size_t>(i) * mesh.stride, fixedData, g_vertexScratch[i]);
 
     const ClipVertex* v = g_vertexScratch.data();
     const int n = mesh.count;
@@ -810,7 +1012,7 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh)
                           setup.texture ? setup.texture->width : 0, setup.texture ? setup.texture->height : 0,
                           setup.lightmap != nullptr, g_state.depthTest, g_state.depthMask, g_state.blend,
                           g_state.alphaTest, g_state.cullFace, v[0].r / 255.0, v[0].g / 255.0, v[0].b / 255.0, v[0].a / 255.0,
-                          v[0].x, v[0].y, v[0].z, v[0].w);
+                          v[0].x / 4096.0, v[0].y / 4096.0, v[0].z / 4096.0, v[0].w / 4096.0);
 #endif
     switch (mesh.primitive)
     {
@@ -840,17 +1042,17 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh)
         break;
     case RenderPrimitive::Lines:
         for (int i = 0; i + 1 < n; i += 2)
-            drawLine(v[i], v[i + 1]);
+            drawLine(setup, v[i], v[i + 1]);
         break;
     case RenderPrimitive::LineStrip:
         for (int i = 0; i + 1 < n; ++i)
-            drawLine(v[i], v[i + 1]);
+            drawLine(setup, v[i], v[i + 1]);
         break;
     case RenderPrimitive::LineLoop:
         for (int i = 0; i + 1 < n; ++i)
-            drawLine(v[i], v[i + 1]);
+            drawLine(setup, v[i], v[i + 1]);
         if (n > 2)
-            drawLine(v[n - 1], v[0]);
+            drawLine(setup, v[n - 1], v[0]);
         break;
     case RenderPrimitive::Points:
         break;
@@ -862,7 +1064,9 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh)
         int changed = 0;
         for (int i = 0; i < 320 * 240; ++i)
             changed += before[i] != NspireSystem::backBuffer()[i];
-        NspireSystem::log("[draw]   -> %d px changed\n", changed);
+        NspireSystem::log("[draw]   -> %d px changed (v0 out=%u scr=%.1f,%.1f,%.1f uv=%.1f,%.1f rgb=%d,%d,%d fog=%d)\n", changed,
+                          v[0].outcode, v[0].screen.x.value / 256.0, v[0].screen.y.value / 256.0, v[0].screen.z.value / 256.0,
+                          v[0].u / 256.0, v[0].v / 256.0, v[0].r, v[0].g, v[0].b, v[0].fog);
     }
 #endif
     return true;
@@ -871,35 +1075,58 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh)
 // ---------------------------------------------------------------------------
 // Mesh store (persistent meshes and terrain chunk handles)
 // ---------------------------------------------------------------------------
+// A mesh the backend keeps and replays many times (terrain sections, display
+// list replacements) is converted once to the pipeline's fixed point:
+// positions Q12, texture coordinates Q16 (drawMeshNow's fixedData). Captures
+// stay float until here, since the shared terrain code still reads them
+// (face sort, plane extents).
+void convertToFixed(RenderCapturedMesh& mesh)
+{
+    for (int v = 0; v < mesh.vertexCount; ++v)
+    {
+        std::int32_t* d = mesh.raw.data() + static_cast<std::size_t>(v) * 8u;
+        float f[5];
+        std::memcpy(f, d, sizeof(f));
+        if (!mesh.positionShort)
+            for (int i = 0; i < 3; ++i)
+                d[i] = NglFixed::fromFloat(f[i], NglFixed::kPosShift);
+        if (mesh.hasTexture)
+        {
+            d[3] = NglFixed::fromFloat(f[3], 16);
+            d[4] = NglFixed::fromFloat(f[4], 16);
+        }
+    }
+}
+
 struct StoredMesh
 {
     RenderCapturedMesh mesh;
-    float tx = 0.0f, ty = 0.0f, tz = 0.0f;
+    std::int32_t translation[3] = {}; // Q12
     bool translated = false;
     // Terrain sections built with the face-direction sort (WiiMeshSort): quads
     // grouped +X,-X,+Y,-Y,+Z,-Z,other, with each group's plane extent in
     // section-local space and the section's world corner to bring the eye there.
     bool hasGroups = false;
     int groupQuads[RenderTerrainFaceGroups::kGroupCount] = {};
-    float planeMin[RenderTerrainFaceGroups::kGroupCount] = {};
-    float planeMax[RenderTerrainFaceGroups::kGroupCount] = {};
-    float origin[3] = {};
+    std::int32_t planeMin[RenderTerrainFaceGroups::kGroupCount] = {}; // Q8
+    std::int32_t planeMax[RenderTerrainFaceGroups::kGroupCount] = {};
+    std::int32_t origin[3] = {};
 };
 
 // Interpolated eye for the terrain pass (renderTerrainSetViewerPosition).
 bool g_eyeValid = false;
-float g_eye[3] = {};
-constexpr float kFaceCullMargin = 0.5f;
+std::int32_t g_eye[3] = {}; // Q8 world coordinates
+constexpr std::int32_t kFaceCullMargin = 128; // half a block, Q8
 
 // Draws the stored mesh, leaving out every face-direction group whose faces all
 // point away from the eye. Roughly half the opaque terrain never reaches the
 // vertex stage this way.
 bool drawStoredMesh(const StoredMesh& stored)
 {
-    if (!stored.hasGroups || !g_eyeValid)
-        return renderDrawCaptured(stored.mesh);
+    if (stored.mesh.empty())
+        return false;
 
-    const float eye[3] = {g_eye[0] - stored.origin[0], g_eye[1] - stored.origin[1], g_eye[2] - stored.origin[2]};
+    const std::int32_t eye[3] = {g_eye[0] - stored.origin[0], g_eye[1] - stored.origin[1], g_eye[2] - stored.origin[2]};
     RenderInterleavedMesh view;
     view.data = stored.mesh.raw.data();
     view.stride = stored.mesh.stride;
@@ -914,6 +1141,13 @@ bool drawStoredMesh(const StoredMesh& stored)
     view.hasBrightness = stored.mesh.hasBrightness;
     view.brightnessOffset = stored.mesh.brightnessOffset;
 
+    if (!stored.hasGroups || !g_eyeValid)
+    {
+        view.first = 0;
+        view.count = stored.mesh.vertexCount;
+        return drawMeshNow(view, true);
+    }
+
     int quad = 0;
     int runStart = -1;
     bool drew = false;
@@ -922,7 +1156,7 @@ bool drawStoredMesh(const StoredMesh& stored)
         {
             view.first = runStart * 4;
             view.count = (end - runStart) * 4;
-            drew |= drawMeshNow(view);
+            drew |= drawMeshNow(view, true);
         }
         runStart = -1;
     };
@@ -960,6 +1194,37 @@ std::size_t g_meshBytes = 0;
 } // namespace
 
 // ---------------------------------------------------------------------------
+// Fixed-point fog table
+// ---------------------------------------------------------------------------
+namespace NglFixed
+{
+namespace
+{
+constexpr int kExpSteps = 1024;             // over [0, 16), 1/64 per step
+std::uint16_t g_expTable[kExpSteps + 1] = {};
+}
+
+void initExpTable()
+{
+    for (int i = 0; i <= kExpSteps; ++i)
+        g_expTable[i] = static_cast<std::uint16_t>(std::exp(-i / 64.0) * 256.0 + 0.5);
+    g_expTable[kExpSteps] = 0;
+}
+
+int expNeg256(std::int32_t xQ12)
+{
+    if (xQ12 <= 0)
+        return 256;
+    const std::int32_t index = xQ12 >> 6;
+    if (index >= kExpSteps)
+        return 0;
+    // Linear between the two neighbouring steps.
+    const int frac = xQ12 & 63;
+    return (g_expTable[index] * (64 - frac) + g_expTable[index + 1] * frac) >> 6;
+}
+} // namespace NglFixed
+
+// ---------------------------------------------------------------------------
 // NglBackend
 // ---------------------------------------------------------------------------
 namespace NglBackend
@@ -970,6 +1235,7 @@ void initialize()
         return;
     nglInit();
     nglSetBuffer(NspireSystem::backBuffer());
+    NglFixed::initExpTable();
     for (auto& stack : g_state.stacks)
         stack.assign(1, identityMatrix());
     ngl_raster = NGLRasterState();
@@ -1041,11 +1307,12 @@ bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float 
         return false;
     }
     stored.mesh.raw.shrink_to_fit();
+    convertToFixed(stored.mesh);
     g_meshBytes += stored.mesh.byteSize();
-    stored.tx = tx;
-    stored.ty = ty;
-    stored.tz = tz;
-    stored.translated = tx != 0.0f || ty != 0.0f || tz != 0.0f;
+    stored.translation[0] = NglFixed::fromFloat(tx, NglFixed::kPosShift);
+    stored.translation[1] = NglFixed::fromFloat(ty, NglFixed::kPosShift);
+    stored.translation[2] = NglFixed::fromFloat(tz, NglFixed::kPosShift);
+    stored.translated = stored.translation[0] != 0 || stored.translation[1] != 0 || stored.translation[2] != 0;
     stored.hasGroups = false;
     if (info != nullptr && info->faceGroups != nullptr && mesh.primitive == RenderPrimitive::Quads && mesh.first == 0)
     {
@@ -1053,13 +1320,13 @@ bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float 
         for (int g = 0; g < RenderTerrainFaceGroups::kGroupCount; ++g)
         {
             stored.groupQuads[g] = info->faceGroups->quadCount[g];
-            stored.planeMin[g] = info->faceGroups->planeMin[g];
-            stored.planeMax[g] = info->faceGroups->planeMax[g];
+            stored.planeMin[g] = NglFixed::fromFloat(info->faceGroups->planeMin[g], 8);
+            stored.planeMax[g] = NglFixed::fromFloat(info->faceGroups->planeMax[g], 8);
             total += stored.groupQuads[g];
         }
-        stored.origin[0] = info->worldOriginX;
-        stored.origin[1] = info->worldOriginY;
-        stored.origin[2] = info->worldOriginZ;
+        stored.origin[0] = NglFixed::fromFloat(info->worldOriginX, 8);
+        stored.origin[1] = NglFixed::fromFloat(info->worldOriginY, 8);
+        stored.origin[2] = NglFixed::fromFloat(info->worldOriginZ, 8);
         stored.hasGroups = total * 4 == mesh.count;
     }
     return true;
@@ -1073,13 +1340,10 @@ bool drawMesh(int handle)
     const StoredMesh& stored = it->second;
     if (stored.translated)
     {
-        const int savedMode = g_state.matrixMode;
-        g_state.matrixMode = 0;
-        renderPushMatrix();
-        renderTranslate(stored.tx, stored.ty, stored.tz);
+        g_meshTranslate = true;
+        std::copy(stored.translation, stored.translation + 3, g_meshTranslation);
         drawStoredMesh(stored);
-        renderPopMatrix();
-        g_state.matrixMode = savedMode;
+        g_meshTranslate = false;
         return true;
     }
     return drawStoredMesh(stored);
@@ -1087,9 +1351,9 @@ bool drawMesh(int handle)
 
 void setViewer(double x, double y, double z)
 {
-    g_eye[0] = static_cast<float>(x);
-    g_eye[1] = static_cast<float>(y);
-    g_eye[2] = static_cast<float>(z);
+    g_eye[0] = NglFixed::fromFloat(static_cast<float>(x), 8);
+    g_eye[1] = NglFixed::fromFloat(static_cast<float>(y), 8);
+    g_eye[2] = NglFixed::fromFloat(static_cast<float>(z), 8);
     g_eyeValid = true;
 }
 
@@ -1432,7 +1696,11 @@ void renderMatrixMode(RenderMatrixMode mode)
     g_state.matrixMode = mode == RenderMatrixMode::Projection ? 1 : mode == RenderMatrixMode::Texture ? 2 : 0;
 }
 
-void renderLoadIdentity() { currentMatrix() = identityMatrix(); }
+void renderLoadIdentity()
+{
+    currentMatrix() = identityMatrix();
+    bumpCurrentMatrix();
+}
 
 void renderPushMatrix()
 {
@@ -1445,6 +1713,7 @@ void renderPopMatrix()
     std::vector<Mat4>& stack = g_state.stacks[currentStackIndex()];
     if (stack.size() > 1)
         stack.pop_back();
+    bumpCurrentMatrix();
 }
 
 void renderTranslate(float x, float y, float z)
@@ -1452,6 +1721,7 @@ void renderTranslate(float x, float y, float z)
     Mat4& m = currentMatrix();
     for (int row = 0; row < 4; ++row)
         m.m[12 + row] += m.m[row] * x + m.m[4 + row] * y + m.m[8 + row] * z;
+    bumpCurrentMatrix();
 }
 
 void renderRotate(float angle, float x, float y, float z)
@@ -1475,6 +1745,7 @@ void renderRotate(float angle, float x, float y, float z)
     r.m[9] = t * y * z - s * x;
     r.m[10] = t * z * z + c;
     currentMatrix() = multiply(currentMatrix(), r);
+    bumpCurrentMatrix();
 }
 
 void renderScale(float x, float y, float z)
@@ -1486,6 +1757,7 @@ void renderScale(float x, float y, float z)
         m.m[4 + row] *= y;
         m.m[8 + row] *= z;
     }
+    bumpCurrentMatrix();
 }
 
 void renderScaleDouble(double x, double y, double z)
@@ -1504,6 +1776,7 @@ void renderFrustum(double left, double right, double bottom, double top, double 
     f.m[11] = -1.0f;
     f.m[14] = static_cast<float>(-2.0 * farValue * nearValue / (farValue - nearValue));
     currentMatrix() = multiply(currentMatrix(), f);
+    bumpCurrentMatrix();
 }
 
 void renderOrtho(double left, double right, double bottom, double top, double nearValue, double farValue)
@@ -1516,6 +1789,7 @@ void renderOrtho(double left, double right, double bottom, double top, double ne
     o.m[13] = static_cast<float>(-(top + bottom) / (top - bottom));
     o.m[14] = static_cast<float>(-(farValue + nearValue) / (farValue - nearValue));
     currentMatrix() = multiply(currentMatrix(), o);
+    bumpCurrentMatrix();
 }
 
 void renderSetLegacyPresentationGamma(bool) {}

@@ -47,7 +47,7 @@ bool g_timerRunning = false;
 bool g_exit = false;
 std::string g_appDir = "/documents/ndless";
 std::uint16_t* g_backBuffer = nullptr;
-std::FILE* g_log = nullptr;
+bool g_logStarted = false;
 
 const t_key* keyTable()
 {
@@ -146,11 +146,6 @@ void initialize(int argc, char** argv)
 
 void shutdown()
 {
-    if (g_log)
-    {
-        std::fclose(g_log);
-        g_log = nullptr;
-    }
     std::free(g_backBuffer);
     g_backBuffer = nullptr;
     stopTimer();
@@ -203,6 +198,36 @@ std::size_t heapUsedBytes() { return nspire_heap_used(); }
 std::size_t heapPeakBytes() { return nspire_heap_peak(); }
 unsigned heapFailures() { return nspire_heap_failures(); }
 
+constexpr std::size_t kGameStackBytes = 1024 * 1024;
+constexpr std::uint32_t kStackPaint = 0x5A17C0DEu;
+std::uint32_t* g_gameStack = nullptr;
+
+void* gameStackTop()
+{
+    // Allocated before anything else and never freed: the program returns
+    // through crt0, which restores the OS stack itself.
+    if (g_gameStack == nullptr)
+    {
+        g_gameStack = static_cast<std::uint32_t*>(std::malloc(kGameStackBytes));
+        if (g_gameStack == nullptr)
+            return nullptr;
+        for (std::size_t i = 0; i < kGameStackBytes / 4; ++i)
+            g_gameStack[i] = kStackPaint;
+    }
+    // 8-byte aligned, as the AAPCS requires at public interfaces.
+    return reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(g_gameStack + kGameStackBytes / 4) & ~std::uintptr_t(7));
+}
+
+std::size_t gameStackUsedBytes()
+{
+    if (g_gameStack == nullptr)
+        return 0;
+    std::size_t untouched = 0;
+    while (untouched < kGameStackBytes / 4 && g_gameStack[untouched] == kStackPaint)
+        ++untouched;
+    return kGameStackBytes - untouched * 4;
+}
+
 long heapFreeKb()
 {
     // The OS heap has no query; Runtime falls back to a fixed budget.
@@ -211,19 +236,20 @@ long heapFreeKb()
 
 void log(const char* fmt, ...)
 {
-    if (g_log == nullptr)
-    {
-        // .tns so the file can be pulled off the calculator with TI's software.
-        const std::string path = g_appDir + "/opticraft_log.txt.tns";
-        g_log = std::fopen(path.c_str(), "w");
-        if (g_log == nullptr)
-            return;
-    }
+    // The OS commits a file to flash only when it is closed, so a hang loses
+    // anything still open. Reopen and close per line: the log is a few lines
+    // every few seconds, and the last ones are the ones that matter.
+    // .tns so the file can be pulled off the calculator with TI's software.
+    const std::string path = g_appDir + "/opticraft_log.txt.tns";
+    std::FILE* file = std::fopen(path.c_str(), g_logStarted ? "a" : "w");
+    if (file == nullptr)
+        return;
+    g_logStarted = true;
     va_list args;
     va_start(args, fmt);
-    std::vfprintf(g_log, fmt, args);
+    std::vfprintf(file, fmt, args);
     va_end(args);
-    std::fflush(g_log);
+    std::fclose(file);
 }
 
 void fatal(const std::string& message)

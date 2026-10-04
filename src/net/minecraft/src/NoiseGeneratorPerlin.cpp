@@ -2,9 +2,11 @@
 
 #include "MathHelper.h"
 
-#if PLATFORM_FLOAT_TERRAIN_NOISE
 #include <cstdint>
 #include <cstring>
+
+#ifndef PLATFORM_FIXED_TERRAIN_NOISE
+#define PLATFORM_FIXED_TERRAIN_NOISE 0
 #endif
 
 namespace
@@ -163,10 +165,148 @@ perlin_real_t NoiseGeneratorPerlin::generateNoise(perlin_real_t d, perlin_real_t
             lerp(d6, grad(permutations[i2+1],fx,fy-1.0f,fz-1.0f), grad(permutations[l2+1],fx-1.0f,fy-1.0f,fz-1.0f))));
 }
 
+#if PLATFORM_FIXED_TERRAIN_NOISE
+// Integer noise for CPUs without an FPU (TI-Nspire): sample coordinates are
+// 64-bit Q16 (an octave's wrapped coordinate stays below 2^24), the fractional
+// parts, fade curve, gradients and interpolation 32-bit Q16 with 64-bit
+// products. Only the final accumulation into the float buffer is floating
+// point. Results differ from the float path in the last bits, so a seed's
+// terrain shifts slightly; the shapes are the same.
+namespace
+{
+using fixed64_t = std::int64_t;
+
+fixed64_t toFixed64(float v)
+{
+    std::uint32_t bits;
+    std::memcpy(&bits, &v, sizeof(bits));
+    const int exponent = static_cast<int>((bits >> 23) & 0xFFu);
+    if (exponent == 0)
+        return 0;
+    const std::int64_t mantissa = static_cast<std::int64_t>((bits & 0x7FFFFFu) | 0x800000u);
+    const int shift = exponent - 127 - 23 + 16;
+    std::int64_t magnitude;
+    if (shift >= 39)
+        magnitude = std::int64_t(1) << 62;
+    else if (shift >= 0)
+        magnitude = mantissa << shift;
+    else if (shift > -24)
+        magnitude = mantissa >> -shift;
+    else
+        magnitude = 0;
+    return (bits >> 31) ? -magnitude : magnitude;
+}
+
+inline std::int32_t fadeFixed(std::int32_t t)
+{
+    // t^3 (t (6t - 15) + 10), Q16.
+    const std::int64_t inner = ((static_cast<std::int64_t>(t) * (6 * t - 15 * 65536)) >> 16) + 10 * 65536;
+    const std::int64_t t3 = (((static_cast<std::int64_t>(t) * t) >> 16) * t) >> 16;
+    return static_cast<std::int32_t>((t3 * inner) >> 16);
+}
+
+inline std::int32_t lerpFixed(std::int32_t t, std::int32_t a, std::int32_t b)
+{
+    return a + static_cast<std::int32_t>((static_cast<std::int64_t>(t) * (b - a)) >> 16);
+}
+
+inline std::int32_t gradFixed(int_t hash, std::int32_t x, std::int32_t y, std::int32_t z)
+{
+    const int_t h = hash & 0xf;
+    const std::int32_t u = h < 8 ? x : y;
+    const std::int32_t v = h < 4 ? y : (h == 12 || h == 14 ? x : z);
+    return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+}
+
+// getBlockMetadata(): the y = 0 gradient of the 2D (single-layer) case.
+inline std::int32_t grad2Fixed(int_t hash, std::int32_t x, std::int32_t z)
+{
+    const int_t h = hash & 0xf;
+    const std::int32_t u = (h & 8) ? 0 : x;
+    const std::int32_t v = h < 4 ? 0 : (h == 12 || h == 14 ? x : z);
+    return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+}
+}
+#endif
+
 void NoiseGeneratorPerlin::getCanSpawnHere(TerrainNoiseBuffer &ad, perlin_real_t d, perlin_real_t d1, perlin_real_t d2,
                                       int_t i, int_t j, int_t k,
                                       perlin_real_t d3, perlin_real_t d4, perlin_real_t d5, perlin_real_t d6)
 {
+#if PLATFORM_FIXED_TERRAIN_NOISE
+    {
+        const int_t* p = permutations.data();
+        const fixed64_t originX = toFixed64(static_cast<float>(d)) + toFixed64(static_cast<float>(xCoord));
+        const fixed64_t originY = toFixed64(static_cast<float>(d1)) + toFixed64(static_cast<float>(yCoord));
+        const fixed64_t originZ = toFixed64(static_cast<float>(d2)) + toFixed64(static_cast<float>(zCoord));
+        const fixed64_t stepX = toFixed64(static_cast<float>(d3));
+        const fixed64_t stepY = toFixed64(static_cast<float>(d4));
+        const fixed64_t stepZ = toFixed64(static_cast<float>(d5));
+        // amplitude / 65536 folds the Q16 result back to the buffer's scale.
+        const terrain_noise_real_t amp = static_cast<terrain_noise_real_t>((perlin_real_t)1.0f / d6 / 65536.0f);
+        constexpr std::int32_t one = 65536;
+        int_t index = 0;
+        if (j == 1)
+        {
+            fixed64_t cx = originX;
+            for (int_t ix = 0; ix < i; ix++, cx += stepX)
+            {
+                const int_t xi = static_cast<int_t>(cx >> 16) & 0xff;
+                const std::int32_t fx = static_cast<std::int32_t>(cx & 0xFFFF);
+                const std::int32_t sx = fadeFixed(fx);
+                fixed64_t cz = originZ;
+                for (int_t iz = 0; iz < k; iz++, cz += stepZ)
+                {
+                    const int_t zi = static_cast<int_t>(cz >> 16) & 0xff;
+                    const std::int32_t fz = static_cast<std::int32_t>(cz & 0xFFFF);
+                    const std::int32_t sz = fadeFixed(fz);
+                    const int_t a = p[p[xi]] + zi;
+                    const int_t b = p[p[xi + 1]] + zi;
+                    const std::int32_t n0 = lerpFixed(sx, grad2Fixed(p[a], fx, fz), gradFixed(p[b], fx - one, 0, fz));
+                    const std::int32_t n1 = lerpFixed(sx, gradFixed(p[a + 1], fx, 0, fz - one), gradFixed(p[b + 1], fx - one, 0, fz - one));
+                    ad[index++] += static_cast<terrain_noise_real_t>(lerpFixed(sz, n0, n1)) * amp;
+                }
+            }
+            return;
+        }
+        int_t lastY = -1;
+        std::int32_t c00 = 0, c10 = 0, c01 = 0, c11 = 0;
+        fixed64_t cx = originX;
+        for (int_t ix = 0; ix < i; ix++, cx += stepX)
+        {
+            const int_t xi = static_cast<int_t>(cx >> 16) & 0xff;
+            const std::int32_t fx = static_cast<std::int32_t>(cx & 0xFFFF);
+            const std::int32_t sx = fadeFixed(fx);
+            fixed64_t cz = originZ;
+            for (int_t iz = 0; iz < k; iz++, cz += stepZ)
+            {
+                const int_t zi = static_cast<int_t>(cz >> 16) & 0xff;
+                const std::int32_t fz = static_cast<std::int32_t>(cz & 0xFFFF);
+                const std::int32_t sz = fadeFixed(fz);
+                fixed64_t cy = originY;
+                for (int_t iy = 0; iy < j; iy++, cy += stepY)
+                {
+                    const int_t yi = static_cast<int_t>(cy >> 16) & 0xff;
+                    const std::int32_t fy = static_cast<std::int32_t>(cy & 0xFFFF);
+                    const std::int32_t sy = fadeFixed(fy);
+                    if (iy == 0 || yi != lastY)
+                    {
+                        lastY = yi;
+                        const int_t a = p[xi] + yi, aa = p[a] + zi, ab = p[a + 1] + zi;
+                        const int_t b = p[xi + 1] + yi, ba = p[b] + zi, bb = p[b + 1] + zi;
+                        c00 = lerpFixed(sx, gradFixed(p[aa], fx, fy, fz), gradFixed(p[ba], fx - one, fy, fz));
+                        c10 = lerpFixed(sx, gradFixed(p[ab], fx, fy - one, fz), gradFixed(p[bb], fx - one, fy - one, fz));
+                        c01 = lerpFixed(sx, gradFixed(p[aa + 1], fx, fy, fz - one), gradFixed(p[ba + 1], fx - one, fy, fz - one));
+                        c11 = lerpFixed(sx, gradFixed(p[ab + 1], fx, fy - one, fz - one), gradFixed(p[bb + 1], fx - one, fy - one, fz - one));
+                    }
+                    const std::int32_t n = lerpFixed(sz, lerpFixed(sy, c00, c10), lerpFixed(sy, c01, c11));
+                    ad[index++] += static_cast<terrain_noise_real_t>(n) * amp;
+                }
+            }
+        }
+        return;
+    }
+#endif
     const terrain_coord_real_t baseX = (terrain_coord_real_t)d;
     const terrain_coord_real_t baseY = (terrain_coord_real_t)d1;
     const terrain_coord_real_t baseZ = (terrain_coord_real_t)d2;

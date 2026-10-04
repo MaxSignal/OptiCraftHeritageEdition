@@ -189,6 +189,35 @@ static inline void ngl_put_pixel(const NGLRasterState &rs, COLOR *screen_px, uin
     if(rs.depth_write)
         *z_px = z;
 }
+// Pixel mode of the current raster state: 0 is the generic path above, 1-16
+// are 1 + (depth test | flat multiply << 1 | depth write << 2 | fog << 3) for
+// opaque colour-writing triangles, whose spans then test nothing per pixel.
+static inline int ngl_pixel_mode()
+{
+    const NGLRasterState &rs = ngl_raster;
+    if(!rs.color_write || rs.blend)
+        return 0;
+    return 1 + ((rs.depth_test ? 1 : 0) | (rs.modulate != 0xFFFF ? 2 : 0) | (rs.depth_write ? 4 : 0) | (rs.fog_add ? 8 : 0));
+}
+
+template <int PM, typename Z>
+static inline void ngl_put_pixel_pm(const NGLRasterState &rs, COLOR *screen_px, uint16_t *z_px, COLOR c, const Z z, const bool textured)
+{
+    if(PM == 0)
+    {
+        ngl_put_pixel(rs, screen_px, z_px, c, z, textured);
+        return;
+    }
+    constexpr int bits = PM - 1;
+    if(textured && (bits & 2))
+        c = ngl_shade(c, rs.modulate);
+    if(bits & 8)
+        c = ngl_add_sat(c, rs.fog_add);
+    *screen_px = c;
+    if(bits & 4)
+        *z_px = z;
+}
+
 extern MATRIX *transformation;
 
 RGB rgbColor(const COLOR c);

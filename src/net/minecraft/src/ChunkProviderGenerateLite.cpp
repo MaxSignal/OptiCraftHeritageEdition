@@ -33,7 +33,12 @@
 #include "java/Random.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+
+#ifndef PLATFORM_FIXED_TERRAIN_NOISE
+#define PLATFORM_FIXED_TERRAIN_NOISE 0
+#endif
 
 namespace
 {
@@ -85,6 +90,10 @@ namespace
 			int_t cell;
 			float fraction;
 			float fadeValue;
+#if PLATFORM_FIXED_TERRAIN_NOISE
+			std::int32_t fractionQ16;
+			std::int32_t fadeQ16;
+#endif
 		};
 
 		void prepareChunk(int_t chunkBlockX, int_t chunkBlockZ)
@@ -106,12 +115,25 @@ namespace
 			const AxisSample *rowContinental = continentalZ[localZ];
 			const AxisSample *columnDetail = detailX[localX];
 			const AxisSample *rowDetail = detailZ[localZ];
+#if PLATFORM_FIXED_TERRAIN_NOISE
+			// Q16 octave sums; two int-to-float conversions per column remain.
+			const std::int32_t continentalSum = perlin2Fixed(columnContinental[0], rowContinental[0])
+				+ (perlin2Fixed(columnContinental[1], rowContinental[1]) >> 1)
+				+ (perlin2Fixed(columnContinental[2], rowContinental[2]) >> 2)
+				+ (perlin2Fixed(columnContinental[3], rowContinental[3]) >> 3);
+			const std::int32_t detailSum = perlin2Fixed(columnDetail[0], rowDetail[0])
+				+ (perlin2Fixed(columnDetail[1], rowDetail[1]) >> 1);
+			// 1/1.875 and 1/1.5 in Q16.
+			const float continental = (float)(int_t)((static_cast<std::int64_t>(continentalSum) * 34953) >> 16) * (1.0f / 65536.0f);
+			const float detail = (float)(int_t)((static_cast<std::int64_t>(detailSum) * 43691) >> 16) * (1.0f / 65536.0f);
+#else
 			const float continental = (perlin2Prepared(columnContinental[0], rowContinental[0])
 				+ perlin2Prepared(columnContinental[1], rowContinental[1]) * 0.5f
 				+ perlin2Prepared(columnContinental[2], rowContinental[2]) * 0.25f
 				+ perlin2Prepared(columnContinental[3], rowContinental[3]) * 0.125f) / 1.875f;
 			const float detail = (perlin2Prepared(columnDetail[0], rowDetail[0])
 				+ perlin2Prepared(columnDetail[1], rowDetail[1]) * 0.5f) / 1.5f;
+#endif
 			detailOut = detail;
 
 			const float base = (float)PLATFORM_HEIGHTMAP_BASE_HEIGHT;
@@ -158,7 +180,13 @@ namespace
 		{
 			const int_t cell = ifloor(value);
 			const float fraction = value - (float)cell;
+#if PLATFORM_FIXED_TERRAIN_NOISE
+			const float faded = fade(fraction);
+			return AxisSample{cell & 255, fraction, faded,
+				(std::int32_t)(fraction * 65536.0f), (std::int32_t)(faded * 65536.0f)};
+#else
 			return AxisSample{cell & 255, fraction, fade(fraction)};
+#endif
 		}
 
 		static void prepareAxis(float coordinate, AxisSample (&continental)[4], AxisSample (&detail)[2])
@@ -177,6 +205,42 @@ namespace
 				detailCoordinate *= 2.0f;
 			}
 		}
+
+#if PLATFORM_FIXED_TERRAIN_NOISE
+		// The gradient coefficients are -1, 0 or 1, so grad2 is additions.
+		static std::int32_t grad2Fixed(int_t hash, std::int32_t x, std::int32_t z)
+		{
+			switch (hash & 7)
+			{
+			case 0: return x + z;
+			case 1: return -x + z;
+			case 2: return x - z;
+			case 3: return -x - z;
+			case 4: return x;
+			case 5: return -x;
+			case 6: return z;
+			default: return -z;
+			}
+		}
+
+		static std::int32_t lerpFixed(std::int32_t t, std::int32_t a, std::int32_t b)
+		{
+			return a + (std::int32_t)((static_cast<std::int64_t>(t) * (b - a)) >> 16);
+		}
+
+		std::int32_t perlin2Fixed(const AxisSample &x, const AxisSample &z) const
+		{
+			const int_t aa = perm[perm[x.cell] + z.cell];
+			const int_t ab = perm[perm[x.cell] + z.cell + 1];
+			const int_t ba = perm[perm[x.cell + 1] + z.cell];
+			const int_t bb = perm[perm[x.cell + 1] + z.cell + 1];
+			constexpr std::int32_t one = 65536;
+			const std::int32_t fx = x.fractionQ16, fz = z.fractionQ16;
+			const std::int32_t x1 = lerpFixed(x.fadeQ16, grad2Fixed(aa, fx, fz), grad2Fixed(ba, fx - one, fz));
+			const std::int32_t x2 = lerpFixed(x.fadeQ16, grad2Fixed(ab, fx, fz - one), grad2Fixed(bb, fx - one, fz - one));
+			return lerpFixed(z.fadeQ16, x1, x2);
+		}
+#endif
 
 		float perlin2Prepared(const AxisSample &x, const AxisSample &z) const
 		{

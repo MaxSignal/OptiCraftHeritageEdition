@@ -1,4 +1,7 @@
 #include "FontRenderer.h"
+#include <cstdint>
+#include <unordered_map>
+#include <array>
 
 #include <algorithm>
 #include <cctype>
@@ -774,7 +777,35 @@ std::vector<std::string> FontRenderer::split(const std::string &s, char delimite
 
 int_t FontRenderer::getCharIndex(char_t c)
 {
-	return String::indexOfUtf16Unit(ChatAllowedCharacters::allowedCharacters(), c);
+	// Every drawn glyph asks this. The allowed-character string is fixed, so its
+	// UTF-16 index (first occurrence, as indexOf) is built once instead of
+	// re-decoding the whole string per glyph.
+	struct CharIndex
+	{
+		std::array<std::int16_t, 256> low;
+		std::unordered_map<char_t, int_t> high;
+		CharIndex()
+		{
+			low.fill(-1);
+			const std::vector<char_t> units = String::toUtf16(jstring(ChatAllowedCharacters::allowedCharacters()));
+			for (std::size_t i = 0; i < units.size(); ++i)
+			{
+				const char_t u = units[i];
+				if (u < 256)
+				{
+					if (low[u] < 0)
+						low[u] = static_cast<std::int16_t>(i);
+				}
+				else
+					high.emplace(u, static_cast<int_t>(i));
+			}
+		}
+	};
+	static const CharIndex index;
+	if (c < 256)
+		return index.low[c];
+	const auto it = index.high.find(c);
+	return it == index.high.end() ? -1 : it->second;
 }
 
 void FontRenderer::setUnicodeFlag(bool unicode)

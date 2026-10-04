@@ -1,23 +1,18 @@
 //This file will be included in gl.cpp for various different versions
 #ifdef TRANSPARENCY
-    static void nglDrawTransparentTriangleXZClipped(const VERTEX *low, const VERTEX *middle, const VERTEX *high)
-    {
+    #define NGL_TRI_IMPL nglDrawTransparentTriangleXZClippedImpl
 #else
     #ifdef FORCE_COLOR
-        static void nglDrawTriangleXZClippedForceColor(const VERTEX *low, const VERTEX *middle, const VERTEX *high)
-        {
+        #define NGL_TRI_IMPL nglDrawTriangleXZClippedForceColorImpl
     #else
-        void nglDrawTriangleXZClipped(const VERTEX *low, const VERTEX *middle, const VERTEX *high)
-        {
-            #ifdef TEXTURE_SUPPORT
-                if(!texture)
-                    return nglDrawTriangleXZClippedForceColor(low, middle, high);
-
-                if(__builtin_expect((low->c & TEXTURE_TRANSPARENT) == TEXTURE_TRANSPARENT, 0))
-                    return nglDrawTransparentTriangleXZClipped(low, middle, high);
-            #endif
+        #define NGL_TRI_IMPL nglDrawTriangleXZClippedImpl
     #endif
 #endif
+// PM is the pixel mode (ngl_pixel_mode()): a template parameter, so the raster
+// state tests fold away inside the spans.
+template <int PM>
+static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *high)
+{
     if((low->y < GLFix(0) && middle->y < GLFix(0) && high->y < GLFix(0))
         || (low->y >= GLFix(SCREEN_HEIGHT) && middle->y >= GLFix(SCREEN_HEIGHT) && high->y >= GLFix(SCREEN_HEIGHT)))
         return;
@@ -174,7 +169,7 @@
         const int v_mask = loc_texture.height - 1;
     #endif
     const NGLRasterState rs = ngl_raster;
-    const bool depth_test = rs.depth_test;
+    const bool depth_test = PM == 0 ? rs.depth_test : ((PM - 1) & 1) != 0;
     const int depth_bias = rs.depth_bias;
 
     //If xstart will get smaller than xend
@@ -213,14 +208,14 @@
                         COLOR c = loc_texture.bitmap[(u.floor() & u_mask) + (v.floor() & v_mask)*loc_texture.width];
                         #ifdef TRANSPARENCY
                             if(__builtin_expect(c != 0x0000, 1))
-                                ngl_put_pixel(rs, screen_buf, z_buf, c, z, true);
+                                ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, c, z, true);
                         #else
-                            ngl_put_pixel(rs, screen_buf, z_buf, c, z, true);
+                            ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, c, z, true);
                         #endif
                     #elif defined(INTERPOLATE_COLORS)
-                        ngl_put_pixel(rs, screen_buf, z_buf, colorRGB(r, g, b), z, false);
+                        ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, colorRGB(r, g, b), z, false);
                     #else
-                        ngl_put_pixel(rs, screen_buf, z_buf, low->c, z, false);
+                        ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, low->c, z, false);
                     #endif
                 }
 
@@ -310,14 +305,14 @@
                         COLOR c = loc_texture.bitmap[(u.floor() & u_mask) + (v.floor() & v_mask)*loc_texture.width];
                         #ifdef TRANSPARENCY
                             if(__builtin_expect(c != 0x0000, 1))
-                                ngl_put_pixel(rs, screen_buf, z_buf, c, z, true);
+                                ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, c, z, true);
                         #else
-                            ngl_put_pixel(rs, screen_buf, z_buf, c, z, true);
+                            ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, c, z, true);
                         #endif
                     #elif defined(INTERPOLATE_COLORS)
-                        ngl_put_pixel(rs, screen_buf, z_buf, colorRGB(r, g, b), z, false);
+                        ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, colorRGB(r, g, b), z, false);
                     #else
-                        ngl_put_pixel(rs, screen_buf, z_buf, low->c, z, false);
+                        ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, low->c, z, false);
                     #endif
                 }
 
@@ -372,3 +367,45 @@
         }
     }
 }
+
+#ifdef TRANSPARENCY
+    static void nglDrawTransparentTriangleXZClipped(const VERTEX *low, const VERTEX *middle, const VERTEX *high)
+    {
+#else
+    #ifdef FORCE_COLOR
+        static void nglDrawTriangleXZClippedForceColor(const VERTEX *low, const VERTEX *middle, const VERTEX *high)
+        {
+    #else
+        void nglDrawTriangleXZClipped(const VERTEX *low, const VERTEX *middle, const VERTEX *high)
+        {
+            #ifdef TEXTURE_SUPPORT
+                if(!texture)
+                    return nglDrawTriangleXZClippedForceColor(low, middle, high);
+
+                if(__builtin_expect((low->c & TEXTURE_TRANSPARENT) == TEXTURE_TRANSPARENT, 0))
+                    return nglDrawTransparentTriangleXZClipped(low, middle, high);
+            #endif
+    #endif
+#endif
+    switch(ngl_pixel_mode())
+    {
+    case 1: return NGL_TRI_IMPL<1>(low, middle, high);
+    case 2: return NGL_TRI_IMPL<2>(low, middle, high);
+    case 3: return NGL_TRI_IMPL<3>(low, middle, high);
+    case 4: return NGL_TRI_IMPL<4>(low, middle, high);
+    case 5: return NGL_TRI_IMPL<5>(low, middle, high);
+    case 6: return NGL_TRI_IMPL<6>(low, middle, high);
+    case 7: return NGL_TRI_IMPL<7>(low, middle, high);
+    case 8: return NGL_TRI_IMPL<8>(low, middle, high);
+    case 9: return NGL_TRI_IMPL<9>(low, middle, high);
+    case 10: return NGL_TRI_IMPL<10>(low, middle, high);
+    case 11: return NGL_TRI_IMPL<11>(low, middle, high);
+    case 12: return NGL_TRI_IMPL<12>(low, middle, high);
+    case 13: return NGL_TRI_IMPL<13>(low, middle, high);
+    case 14: return NGL_TRI_IMPL<14>(low, middle, high);
+    case 15: return NGL_TRI_IMPL<15>(low, middle, high);
+    case 16: return NGL_TRI_IMPL<16>(low, middle, high);
+    default: return NGL_TRI_IMPL<0>(low, middle, high);
+    }
+}
+#undef NGL_TRI_IMPL

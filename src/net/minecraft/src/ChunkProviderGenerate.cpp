@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -132,6 +133,37 @@ WorldChunkManager *ChunkProviderGenerate::generationWorldChunkManager() const
 }
 
 #if !PLATFORM_USE_HEIGHTMAP_TERRAIN
+#ifndef PLATFORM_FIXED_TERRAIN_NOISE
+#define PLATFORM_FIXED_TERRAIN_NOISE 0
+#endif
+
+#if PLATFORM_FIXED_TERRAIN_NOISE
+namespace
+{
+// Float to Q12 by taking the bits apart (no soft-float call); saturates.
+std::int32_t fixedDensityQ12(float v)
+{
+	std::uint32_t bits;
+	std::memcpy(&bits, &v, sizeof(bits));
+	const int exponent = static_cast<int>((bits >> 23) & 0xFFu);
+	if (exponent == 0)
+		return 0;
+	const std::int32_t mantissa = static_cast<std::int32_t>((bits & 0x7FFFFFu) | 0x800000u);
+	const int shift = exponent - 127 - 23 + 12;
+	std::int32_t magnitude;
+	if (exponent == 0xFF || shift > 6)
+		magnitude = 0x3FFFFFFF;
+	else if (shift >= 0)
+		magnitude = mantissa << shift;
+	else if (shift > -24)
+		magnitude = mantissa >> -shift;
+	else
+		magnitude = 0;
+	return (bits >> 31) ? -magnitude : magnitude;
+}
+}
+#endif
+
 void ChunkProviderGenerate::generateTerrain(int_t chunkX, int_t chunkZ, byte_t *blocks,
 	BiomeGenBase **, const biome_noise_real_t *)
 {
@@ -153,6 +185,53 @@ void ChunkProviderGenerate::generateTerrain(int_t chunkX, int_t chunkZ, byte_t *
 		JavaArithmetic::intMul(chunkX, horizontalCells), 0,
 		JavaArithmetic::intMul(chunkZ, horizontalCells),
 		noiseWidth, noiseHeight, noiseDepth);
+
+#if PLATFORM_FIXED_TERRAIN_NOISE
+	// Integer trilinear fill (no FPU): the 5x17x5 density lattice is converted
+	// to Q12 once, then the 32768 block samples are additions and a sign test.
+	// The steps are exact divisions by 8 and 4, i.e. shifts.
+	{
+		std::int32_t lattice[5 * 5 * 17];
+		for (int_t n = 0; n < noiseWidth * noiseDepth * noiseHeight; ++n)
+			lattice[n] = fixedDensityQ12(static_cast<float>(field_4180_q[n]));
+		const byte_t stoneId = static_cast<byte_t>(Block::stone->blockID);
+		const byte_t waterId = static_cast<byte_t>(Block::waterStill->blockID);
+		for (int_t cellX = 0; cellX < horizontalCells; ++cellX)
+			for (int_t cellZ = 0; cellZ < horizontalCells; ++cellZ)
+				for (int_t cellY = 0; cellY < verticalCells; ++cellY)
+				{
+					const std::int32_t* c00 = &lattice[((cellX + 0) * noiseDepth + cellZ + 0) * noiseHeight + cellY];
+					const std::int32_t* c01 = &lattice[((cellX + 0) * noiseDepth + cellZ + 1) * noiseHeight + cellY];
+					const std::int32_t* c10 = &lattice[((cellX + 1) * noiseDepth + cellZ + 0) * noiseHeight + cellY];
+					const std::int32_t* c11 = &lattice[((cellX + 1) * noiseDepth + cellZ + 1) * noiseHeight + cellY];
+					std::int32_t d00 = c00[0], d01 = c01[0], d10 = c10[0], d11 = c11[0];
+					const std::int32_t s00 = (c00[1] - d00) >> 3, s01 = (c01[1] - d01) >> 3;
+					const std::int32_t s10 = (c10[1] - d10) >> 3, s11 = (c11[1] - d11) >> 3;
+					for (int_t subY = 0; subY < 8; ++subY)
+					{
+						const int_t y = cellY * 8 + subY;
+						const byte_t empty = y < seaLevel ? waterId : 0;
+						std::int32_t left = d00, right = d01;
+						const std::int32_t leftStep = (d10 - d00) >> 2, rightStep = (d11 - d01) >> 2;
+						for (int_t subX = 0; subX < 4; ++subX)
+						{
+							int_t index = ((subX + cellX * 4) << 11) | ((cellZ * 4) << 7) | y;
+							const std::int32_t step = (right - left) >> 2;
+							std::int32_t density = left;
+							for (int_t subZ = 0; subZ < 4; ++subZ, index += 128, density += step)
+								blocks[index] = density > 0 ? stoneId : empty;
+							left += leftStep;
+							right += rightStep;
+						}
+						d00 += s00;
+						d01 += s01;
+						d10 += s10;
+						d11 += s11;
+					}
+				}
+		return;
+	}
+#endif
 
 	for (int_t cellX = 0; cellX < horizontalCells; ++cellX)
 	{

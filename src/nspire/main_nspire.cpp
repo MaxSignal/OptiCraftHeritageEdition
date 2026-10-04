@@ -13,7 +13,9 @@
 #include "nspire/NspireSystem.h"
 #include "nspire/render/NglBackend.h"
 
-int main(int argc, char** argv)
+namespace
+{
+int runGame(int argc, char** argv)
 {
 	NspireSystem::initialize(argc, argv);
 	NspireSystem::log("OptiCraft Heritage for TI-Nspire, built " __DATE__ " " __TIME__ "\n");
@@ -34,5 +36,41 @@ int main(int argc, char** argv)
 	NspireSystem::shutdown();
 	return 0;
 }
+}
+
+#ifndef _TINSPIRE
+int main(int argc, char** argv) { return runGame(argc, argv); }
+#else
+// Ndless runs main() on the OS task's own stack, which is far smaller than the
+// game's deepest paths (lighting and fluid updates, world generation, the GUI)
+// need, and an overflow silently corrupts whatever lies below it. Run the game
+// on a stack of its own from the heap. NspireSystem paints it so the status
+// log can report how deep it actually went.
+extern "C" int nspire_call_on_stack(void* top, int (*fn)(int, char**), int argc, char** argv);
+asm(R"(
+	.text
+	.arm
+	.align 2
+	.global nspire_call_on_stack
+nspire_call_on_stack:
+	push {r4, lr}
+	mov r4, sp
+	mov sp, r0
+	mov r12, r1
+	mov r0, r2
+	mov r1, r3
+	blx r12
+	mov sp, r4
+	pop {r4, pc}
+)");
+
+int main(int argc, char** argv)
+{
+	void* top = NspireSystem::gameStackTop();
+	if (top == nullptr)
+		return runGame(argc, argv);
+	return nspire_call_on_stack(top, runGame, argc, argv);
+}
+#endif
 
 #endif
