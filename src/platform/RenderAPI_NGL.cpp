@@ -812,14 +812,19 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
     else
         vertexColor = color565(r, g, b);
 
-    VERTEX nv[9];
+    // The polygon to rasterise, by pointer: the vertices' own projections on
+    // the fast path (no copies or initialisation per triangle), the clipper's
+    // output otherwise. The vertex scratch is not const storage, so setting the
+    // per-triangle colour on a shared corner below is fine.
+    static VERTEX s_clipped[9];
+    VERTEX* nv[9];
     int count = 3;
     if ((v0.outcode | v1.outcode | v2.outcode) == 0)
     {
         // Fast path: all three corners projected already, no clipping.
-        nv[0] = v0.screen;
-        nv[1] = v1.screen;
-        nv[2] = v2.screen;
+        nv[0] = const_cast<VERTEX*>(&v0.screen);
+        nv[1] = const_cast<VERTEX*>(&v1.screen);
+        nv[2] = const_cast<VERTEX*>(&v2.screen);
     }
     else
     {
@@ -837,10 +842,13 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
         ++g_triClipped;
 #endif
         for (int i = 0; i < count; ++i)
-            nv[i] = project(setup, poly[i]);
+        {
+            s_clipped[i] = project(setup, poly[i]);
+            nv[i] = &s_clipped[i];
+        }
     }
 
-    if (culled(screenArea(nv[0], nv[1], nv[2])))
+    if (culled(screenArea(*nv[0], *nv[1], *nv[2])))
     {
 #ifndef _TINSPIRE
         ++g_triCulled;
@@ -868,9 +876,9 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
     }
     ++g_stats.trianglesDrawn;
     for (int i = 0; i < count; ++i)
-        nv[i].c = vertexColor;
+        nv[i]->c = vertexColor;
     for (int i = 1; i + 1 < count; ++i)
-        nglDrawTriangleZClipped(&nv[0], &nv[i], &nv[i + 1]);
+        nglDrawTriangleZClipped(nv[0], nv[i], nv[i + 1]);
 }
 
 void drawLine(const DrawSetup& setup, const ClipVertex& a, const ClipVertex& b)

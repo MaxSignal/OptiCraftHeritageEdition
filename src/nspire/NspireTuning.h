@@ -51,10 +51,10 @@
 #define PLATFORM_FLOAT_ORE_VEINS         1
 
 // Water, lava, fire and portal animations are computed in software floats every
-// tick (~30 ms a tick on the calculator, measured on the title screen). A
-// quarter rate is still a visible animation.
+// tick (~30 ms a tick on the calculator, measured on the title screen). Once a
+// second still reads as moving water; at a quarter rate it was ~15 ms a frame.
 #undef  PLATFORM_DYNAMIC_TEXTURE_INTERVAL_TICKS
-#define PLATFORM_DYNAMIC_TEXTURE_INTERVAL_TICKS 4
+#define PLATFORM_DYNAMIC_TEXTURE_INTERVAL_TICKS 20
 
 // Terrain noise in integers: the heightmap generator's 2D noise
 // (ChunkProviderGenerateLite.cpp) and the 3D Perlin octaves

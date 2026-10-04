@@ -509,7 +509,12 @@ void GameSettings::setOptionValue(const EnumOptions *enumoptions, int_t i)
     if (enumoptions == EnumOptions::RENDER_DISTANCE)
     {
         renderDistance = platformGameSettingsCycleRenderDistance(renderDistance, i);
+#if PLATFORM_NSPIRE
+        // Tiny = one chunk, Short = two (GameSettingsBackend_NSPIRE.cpp).
+        ofRenderDistanceFine = JavaArithmetic::intShl(16, JavaArithmetic::intSub(3, renderDistance));
+#else
         ofRenderDistanceFine = JavaArithmetic::intShl(32, JavaArithmetic::intSub(3, renderDistance));
+#endif
         ofRenderDistanceFine = platformGameSettingsClampFineRenderDistance(ofRenderDistanceFine);
     }
     if (enumoptions == EnumOptions::GUI_SCALE)

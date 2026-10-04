@@ -200,8 +200,14 @@ int_t Config::getMaxRenderDistanceFine()
 
 int_t Config::getRenderDistanceFine()
 {
+#if defined(NSPIRE_PLATFORM)
+	// One chunk is the calculator's default (GameSettingsBackend_NSPIRE.cpp).
+	constexpr int_t minFine = 16;
+#else
+	constexpr int_t minFine = 32;
+#endif
 	return gameSettings != nullptr
-		? limit(gameSettings->ofRenderDistanceFine, 32, getMaxRenderDistanceFine())
+		? limit(gameSettings->ofRenderDistanceFine, minFine, getMaxRenderDistanceFine())
 		: 128;
 }
 

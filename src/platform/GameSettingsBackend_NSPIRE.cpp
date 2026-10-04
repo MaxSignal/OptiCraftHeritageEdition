@@ -92,20 +92,21 @@ int_t platformGameSettingsClampRenderDistance(int_t value)
 }
 
 // The renderer grid is built from the fine distance (2 * fine / 16 + 1 sections
-// across), so it must follow the Tiny/Short choice: 32 or 64 blocks. Left at
-// the desktop default of 128 it built a 17x17 column grid, ~1150 sections
-// frustum-tested and scheduled every frame for a world that only streams a few
-// chunks around the player.
+// across), so it must follow the Tiny/Short choice: one chunk (16 blocks, a
+// 3x3 column grid) or two (32, 5x5). Left at the desktop default of 128 it
+// built a 17x17 column grid, ~1150 sections frustum-tested and scheduled every
+// frame for a world that only streams a few chunks around the player. On a
+// 320x240 screen at a few frames per second, one chunk is the playable default.
 int_t platformGameSettingsClampFineRenderDistance(int_t value)
 {
-	const int_t maxDistance = 64;
-	return value < 32 ? 32 : (value > maxDistance ? maxDistance : value);
+	const int_t maxDistance = 32;
+	return value < 16 ? 16 : (value > maxDistance ? maxDistance : value);
 }
 
 void platformGameSettingsUpdateRenderDistanceFromFine(int_t fineDistance, int_t& renderDistance)
 {
 	fineDistance = platformGameSettingsClampFineRenderDistance(fineDistance);
-	renderDistance = fineDistance > 32 ? 2 : 3;
+	renderDistance = fineDistance > 16 ? 2 : 3;
 }
 
 bool platformGameSettingsAnaglyphValue(bool, bool) { return false; }
@@ -117,7 +118,7 @@ void platformGameSettingsFinalizeLoad(GameSettings& settings)
 	// GameSettings::setDefaults() assigns the desktop fine distance after
 	// platformGameSettingsInitialize(), and older option files saved it.
 	settings.ofRenderDistanceFine = platformGameSettingsClampFineRenderDistance(
-		32 << (3 - settings.renderDistance));
+		16 << (3 - settings.renderDistance));
 	settings.ofChunkUpdates = std::max(settings.ofChunkUpdates, (int_t)1);
 	platformGameSettingsApplyLegacyCrafting(settings);
 	applyMovementKeys(settings);

@@ -119,23 +119,13 @@
 #undef  PLATFORM_DEFAULT_MIPMAP_LEVEL
 #define PLATFORM_DEFAULT_MIPMAP_LEVEL            0
 
-// Moving vertical renderer window, the PS2's 5x3x5 idea at Nspire proportions
-// (Ps2CoreTuning.h). The renderer grid is the product of three numbers and the
-// vertical one was the only one still paying for the whole world column: SHORT
-// with all 8 sections is 9 x 8 x 9 = 648 slots, of which the bands more than a
-// few chunks above or below the player are terrain the horizontal window cannot
-// reach anyway.
-//
-// 5 sections is 80 blocks tall against SHORT's 72-block horizontal reach, so the
-// window covers what the far plane can show and the clipped bands sit outside
-// the frustum in ordinary play. 9 x 5 x 9 = 405 slots, 37% fewer sections to
-// mesh, keep resident and evict against the 11 MB list budget. Standing on a
-// peak looking down into a deep valley is where this shows: sections outside
-// the window have no renderer, so that floor is not drawn until the window
-// follows the player down. Drop to 4 if the [WII][RAM] gxlists= figure still
-// sits at the eviction high water.
+// Moving vertical renderer window, the PS2's 5x3x5 idea (Ps2CoreTuning.h):
+// three 16-block sections centred on the player. With the one-chunk default
+// (a 3x3 column grid, GameSettingsBackend_NSPIRE.cpp) the far plane is 16-32
+// blocks away, so a 48-block band covers what can be seen; a deep valley floor
+// below the window is not drawn until the window follows the player down.
 #undef  PLATFORM_VERTICAL_CHUNK_COUNT
-#define PLATFORM_VERTICAL_CHUNK_COUNT            4
+#define PLATFORM_VERTICAL_CHUNK_COUNT            3
 #undef  PLATFORM_CENTER_VERTICAL_RENDERERS
 #define PLATFORM_CENTER_VERTICAL_RENDERERS       1
 
@@ -259,6 +249,12 @@
 // the AI throttle below only the ones near the player run every tick anyway.
 #undef  PLATFORM_MAX_LIVE_MOBS
 #define PLATFORM_MAX_LIVE_MOBS                   4
+// Passive mobs placed by world generation: every animal is an AI and physics
+// tick (the "entities" phase was ~35 ms a frame on the calculator).
+#undef  PLATFORM_WORLDGEN_ANIMAL_GROUP_MAX
+#define PLATFORM_WORLDGEN_ANIMAL_GROUP_MAX       2
+#undef  PLATFORM_WORLDGEN_ANIMAL_LIVE_MAX
+#define PLATFORM_WORLDGEN_ANIMAL_LIVE_MAX        6
 #undef  PLATFORM_PATHFIND_BUDGET_PER_TICK
 #define PLATFORM_PATHFIND_BUDGET_PER_TICK        2
 #undef  PLATFORM_PATHFIND_MAX_NODES
