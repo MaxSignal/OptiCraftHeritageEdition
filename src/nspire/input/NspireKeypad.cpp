@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 
 #include "lwjgl/Keyboard.h"
 #include "lwjgl/Mouse.h"
+#include "platform/Input.h"
 #include "nspire/NspireSystem.h"
 #include "nspire/input/NspireKeys.h"
 
@@ -79,6 +81,16 @@ bool g_fkeyDown[NK_COUNT] = {};
 // and enter hand it back to keyboard selection.
 bool g_pointerActive = false;
 constexpr int kParkedCursor = -10000;
+// The keypad as a console pad (PLATFORM_TEXT_* bits) for the slot navigator of
+// inventories and other container screens: arrows move between slots, enter or
+// the touchpad click is the primary click, menu the secondary one.
+std::uint32_t g_padHeld = 0;
+// Presses since the slot navigator last read the pad. A frame can run several
+// GUI ticks; the first read consumes them, so one press moves the selection
+// once and the screens that read after it see nothing twice.
+std::uint32_t g_padPressed = 0;
+// Creative inventory tabs, ( and ): consumed by their own reader.
+int g_pageSteps = 0;
 
 bool pressed(int key, const bool* now) { return now[key] && !g_prev[key]; }
 bool released(int key, const bool* now) { return !now[key] && g_prev[key]; }
@@ -126,6 +138,20 @@ void emitKeys(const bool* now)
         else if (released(m.nspireKey, now) && m.lwjglKey != Key::KEY_NONE)
             lwjgl::Keyboard::detail::pushKey(m.lwjglKey, false);
     }
+}
+
+std::uint32_t padBits(const bool* keys)
+{
+    if (keys[NK_CTRL])
+        return 0; // ctrl+arrows drive the pointer instead
+    std::uint32_t bits = 0;
+    if (keys[NK_LEFT]) bits |= PLATFORM_TEXT_LEFT;
+    if (keys[NK_RIGHT]) bits |= PLATFORM_TEXT_RIGHT;
+    if (keys[NK_UP]) bits |= PLATFORM_TEXT_UP;
+    if (keys[NK_DOWN]) bits |= PLATFORM_TEXT_DOWN;
+    if (keys[NK_ENTER] || keys[NK_CLICK]) bits |= PLATFORM_TEXT_TYPE;
+    if (keys[NK_MENU]) bits |= PLATFORM_TEXT_BACK;
+    return bits;
 }
 
 void emitButtons(const bool* now, bool inMenu)
@@ -235,11 +261,35 @@ void poll(bool inMenu)
         dt = kMaxStepSeconds;
 
     emitKeys(now);
-    emitButtons(now, inMenu);
+
+    const std::uint32_t padNow = padBits(now);
+    if (inMenu && platformContainerNavigationActive())
+    {
+        g_padPressed |= padNow & ~g_padHeld;
+        if (pressed(NK_LP, now))
+            --g_pageSteps;
+        if (pressed(NK_RP, now))
+            ++g_pageSteps;
+    }
+    else
+    {
+        g_padPressed = 0; // nothing typed in other screens carries into an inventory
+        g_pageSteps = 0;
+    }
+    g_padHeld = padNow;
+    // In a container screen the keys drive the slot navigator (see
+    // platformTextInputSnapshot); as mouse buttons they would click wherever the
+    // parked pointer is -- outside the window, which drops the carried stack.
+    const bool slotNavigation = inMenu && platformContainerNavigationActive() && !g_pointerActive && !now[NK_CTRL];
+    if (!slotNavigation)
+        emitButtons(now, inMenu);
     // Menus: arrows navigate, ctrl+arrows drive the pointer (inventories and
     // other mouse-only screens). In the world the arrows always look around.
     const bool wasPointerActive = g_pointerActive;
-    if (now[NK_CLICK] || (now[NK_CTRL] && (now[NK_UP] || now[NK_DOWN] || now[NK_LEFT] || now[NK_RIGHT])))
+    // In a container screen the click is the slot navigator's, so only
+    // ctrl+arrows hand the menu to the pointer there.
+    const bool clickTakesPointer = now[NK_CLICK] && !(inMenu && platformContainerNavigationActive());
+    if (clickTakesPointer || (now[NK_CTRL] && (now[NK_UP] || now[NK_DOWN] || now[NK_LEFT] || now[NK_RIGHT])))
         g_pointerActive = true;
     else if (inMenu && (pressed(NK_UP, now) || pressed(NK_DOWN, now) || pressed(NK_LEFT, now) ||
                         pressed(NK_RIGHT, now) || pressed(NK_ENTER, now)))
@@ -251,7 +301,9 @@ void poll(bool inMenu)
         lwjgl::Mouse::detail::pushMotion(static_cast<int>(g_cursorX), static_cast<int>(g_cursorY), 0, 0);
     else if (!g_pointerActive)
         lwjgl::Mouse::setCursorPosition(kParkedCursor, kParkedCursor);
-    if (inMenu && !now[NK_CTRL])
+    if (slotNavigation)
+        g_motionCarryX = g_motionCarryY = 0.0f;
+    else if (inMenu && !now[NK_CTRL])
     {
         emitMenuArrows(now);
         g_motionCarryX = g_motionCarryY = 0.0f;
@@ -268,6 +320,21 @@ void poll(bool inMenu)
 bool pointerActive()
 {
     return g_pointerActive;
+}
+
+std::uint32_t padHeld() { return g_padHeld; }
+std::uint32_t padPressed()
+{
+    const std::uint32_t pressedBits = g_padPressed;
+    g_padPressed = 0;
+    return pressedBits;
+}
+
+int consumePageSteps()
+{
+    const int steps = g_pageSteps;
+    g_pageSteps = 0;
+    return steps;
 }
 
 void setCursor(int x, int y)

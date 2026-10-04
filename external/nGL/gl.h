@@ -16,6 +16,10 @@
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
 
+// Triangles are clipped to [0, ngl_clip_w) x [0, ngl_clip_h); rows keep the
+// SCREEN_WIDTH pitch.
+extern int ngl_clip_w, ngl_clip_h;
+
 //GLFix is an integral part of all calculations.
 //Changing resolution and width may be an improvement or even break everything.
 typedef Fix<8, int32_t> GLFix;
@@ -148,6 +152,9 @@ struct NGLRasterState
     bool blend = false;
     COLOR modulate = 0xFFFF;
     COLOR fog_add = 0;
+    // Texel origin and wrap mask of a repeated atlas tile; 0 = whole texture.
+    int tex_offset = 0;
+    int tile_mask = 0;
 };
 extern NGLRasterState ngl_raster;
 
@@ -230,7 +237,7 @@ extern NGLDivisor ngl_divisors[NGL_DIV_TABLE];
 void ngl_init_divisors();
 
 // n / d with C's truncation toward zero.
-static inline int32_t ngl_div(const int32_t n, const int d)
+__attribute__((always_inline)) static inline int32_t ngl_div(const int32_t n, const int d)
 {
     if(__builtin_expect(d > 0 && d < NGL_DIV_TABLE, 1))
     {
@@ -240,12 +247,18 @@ static inline int32_t ngl_div(const int32_t n, const int d)
         return n < 0 ? -static_cast<int32_t>(q) : static_cast<int32_t>(q);
     }
     if(d < 0 && d > -NGL_DIV_TABLE)
-        return -ngl_div(n, -d);
+    {
+        // n / d == -(n / -d) with truncation; same table, no recursion so this inlines.
+        const NGLDivisor &t = ngl_divisors[-d];
+        const uint32_t a = n < 0 ? 0u - static_cast<uint32_t>(n) : static_cast<uint32_t>(n);
+        const uint32_t q = static_cast<uint32_t>(((static_cast<uint64_t>(a) * t.m) >> 32) >> t.shift);
+        return n < 0 ? static_cast<int32_t>(q) : -static_cast<int32_t>(q);
+    }
     return n / d;
 }
 
 template <typename F>
-static inline F ngl_divf(const F f, const int d)
+__attribute__((always_inline)) static inline F ngl_divf(const F f, const int d)
 {
     F r;
     r.value = ngl_div(f.value, d);

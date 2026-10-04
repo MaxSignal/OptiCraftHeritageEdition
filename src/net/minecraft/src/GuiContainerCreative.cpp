@@ -1,4 +1,8 @@
 #include "GuiContainerCreative.h"
+#include "platform/PlatformConfig.h"
+#if PLATFORM_NSPIRE
+#include "nspire/input/NspireKeypad.h"
+#endif
 
 #include "AchievementList.h"
 #include "ContainerCreative.h"
@@ -119,6 +123,20 @@ void GuiContainerCreative::updateScreen()
         }
     }
 #else
+#if PLATFORM_NSPIRE
+    // ( and ) on the keypad step through the tabs (NspireKeypad).
+    for (int_t steps = NspireKeypad::consumePageSteps(); legacyCreativeEnabled && steps != 0;)
+    {
+        ContainerCreative *container = static_cast<ContainerCreative *>(inventorySlots);
+        if (container == nullptr)
+            break;
+        const int_t step = steps > 0 ? 1 : -1;
+        setCategory((container->getCategory() + 6 + step) % 6);
+        steps -= step;
+        if (mc != nullptr && mc->sndManager != nullptr)
+            mc->sndManager->playSoundFX("random.click", 1.0f, 1.0f);
+    }
+#endif
     const PlatformTextInputSnapshot pad = platformTextInputSnapshot(getOwnerPlayerIndex());
     if (pad.connected)
     {

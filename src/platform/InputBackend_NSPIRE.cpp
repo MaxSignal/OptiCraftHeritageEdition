@@ -3,12 +3,19 @@
 #include "nspire/input/NspireKeypad.h"
 
 // The keypad reaches the game as lwjgl keyboard and mouse events
-// (nspire/input/NspireKeypad.cpp); there is no gamepad and no on-screen
-// keyboard, so every controller-shaped query answers "not connected".
+// (nspire/input/NspireKeypad.cpp). The one exception is a container screen:
+// there the arrows, enter/click and menu act as a console pad for the slot
+// navigator (ContainerSlotNavigator), so inventories need no pointer. Anywhere
+// else the pad answers "not connected", which leaves menus to the lwjgl keys.
 PlatformTextInputSnapshot platformTextInputSnapshot(int port)
 {
-    (void)port;
-    return {};
+    PlatformTextInputSnapshot pad;
+    if (port != 0 || !platformContainerNavigationActive() || NspireKeypad::pointerActive())
+        return pad;
+    pad.connected = true;
+    pad.held = NspireKeypad::padHeld();
+    pad.pressed = NspireKeypad::padPressed();
+    return pad;
 }
 
 PlatformGamepadSnapshot platformGamepadSnapshot(int port)

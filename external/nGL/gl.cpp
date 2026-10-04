@@ -36,6 +36,7 @@ static COLOR *screen_inverted; //For monochrome calcs
 static int matrix_stack_left = MATRIX_STACK_SIZE;
 
 NGLDivisor ngl_divisors[NGL_DIV_TABLE];
+int ngl_clip_w = SCREEN_WIDTH, ngl_clip_h = SCREEN_HEIGHT;
 
 void ngl_init_divisors()
 {
@@ -514,7 +515,7 @@ void nglDrawTriangleXRightZClipped(const VERTEX *low, const VERTEX *middle, cons
 static void interpolateVertexXRight(const VERTEX *from, const VERTEX *to, VERTEX *res)
 {
     GLFix diff = to->x - from->x;
-    GLFix end = (SCREEN_WIDTH - 1);
+    GLFix end = (ngl_clip_w - 1);
     GLFix t = (end - from->x) / diff;
 
     res->x = end;
@@ -543,26 +544,26 @@ void nglDrawTriangleZClipped(const VERTEX *low, const VERTEX *middle, const VERT
 {
     //If not on screen, skip
     if((low->x < GLFix(0) && middle->x < GLFix(0) && high->x < GLFix(0))
-       || (low->x >= GLFix(SCREEN_WIDTH) && middle->x >= GLFix(SCREEN_WIDTH) && high->x >= GLFix(SCREEN_WIDTH))
+       || (low->x >= GLFix(ngl_clip_w) && middle->x >= GLFix(ngl_clip_w) && high->x >= GLFix(ngl_clip_w))
        || (low->y < GLFix(0) && middle->y < GLFix(0) && high->y < GLFix(0))
-       || (low->y >= GLFix(SCREEN_HEIGHT) && middle->y >= GLFix(SCREEN_HEIGHT) && high->y >= GLFix(SCREEN_HEIGHT)))
+       || (low->y >= GLFix(ngl_clip_h) && middle->y >= GLFix(ngl_clip_h) && high->y >= GLFix(ngl_clip_h)))
         return;
 
     const VERTEX* invisible[3];
     const VERTEX* visible[3];
     int count_invisible = -1, count_visible = -1;
 
-    if(low->x > GLFix(SCREEN_WIDTH-1))
+    if(low->x > GLFix(ngl_clip_w-1))
         invisible[++count_invisible] = low;
     else
         visible[++count_visible] = low;
 
-    if(middle->x > GLFix(SCREEN_WIDTH-1))
+    if(middle->x > GLFix(ngl_clip_w-1))
         invisible[++count_invisible] = middle;
     else
         visible[++count_visible] = middle;
 
-    if(high->x > GLFix(SCREEN_WIDTH-1))
+    if(high->x > GLFix(ngl_clip_w-1))
         invisible[++count_invisible] = high;
     else
         visible[++count_visible] = high;
@@ -875,11 +876,23 @@ void glBegin(GLDrawMode mode)
 
 void glClear(const int buffers)
 {
-    if(buffers & GL_COLOR_BUFFER_BIT)
-        std::fill(screen, screen + SCREEN_WIDTH*SCREEN_HEIGHT, color);
+    if(ngl_clip_w == SCREEN_WIDTH && ngl_clip_h == SCREEN_HEIGHT)
+    {
+        if(buffers & GL_COLOR_BUFFER_BIT)
+            std::fill(screen, screen + SCREEN_WIDTH*SCREEN_HEIGHT, color);
 
-    if(buffers & GL_DEPTH_BUFFER_BIT)
-        std::fill(z_buffer, z_buffer + SCREEN_WIDTH*SCREEN_HEIGHT, UINT16_MAX);
+        if(buffers & GL_DEPTH_BUFFER_BIT)
+            std::fill(z_buffer, z_buffer + SCREEN_WIDTH*SCREEN_HEIGHT, UINT16_MAX);
+        return;
+    }
+    // Only the clip rectangle.
+    for(int y = 0; y < ngl_clip_h; ++y)
+    {
+        if(buffers & GL_COLOR_BUFFER_BIT)
+            std::fill(screen + y*SCREEN_WIDTH, screen + y*SCREEN_WIDTH + ngl_clip_w, color);
+        if(buffers & GL_DEPTH_BUFFER_BIT)
+            std::fill(z_buffer + y*SCREEN_WIDTH, z_buffer + y*SCREEN_WIDTH + ngl_clip_w, UINT16_MAX);
+    }
 }
 
 void glLoadIdentity()

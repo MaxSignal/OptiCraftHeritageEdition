@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // Calculator keypad -> lwjgl Keyboard/Mouse events.
 //
 //   Letters, digits, space, del, tab, esc   the lwjgl key of the same name
@@ -27,6 +29,11 @@ void poll(bool inMenu);
 // True while the pointer (ctrl+arrows, touchpad click) rather than keyboard
 // selection owns menu input.
 bool pointerActive();
+// This frame's keypad as PLATFORM_TEXT_* pad bits (held / newly pressed).
+std::uint32_t padHeld();
+std::uint32_t padPressed(); // consumes
+// Creative inventory tab steps from ( and ) since the last call (consumes).
+int consumePageSteps();
 // Move the software cursor (keyboard selection follows the pointer on consoles).
 void setCursor(int x, int y);
 // Calculator key label for a lwjgl key code, or null if it has none.

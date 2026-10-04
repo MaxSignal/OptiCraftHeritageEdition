@@ -29,10 +29,48 @@ void platformGameSettingsApplyLegacyCrafting(GameSettings& settings)
 	}
 }
 
+// Movement on B / H / I / J: on the calculator's letter grid (ABCDEFG over
+// HIJKLMN) they sit like W / A / S / D on a PC keyboard, whereas W, A, S and D
+// are scattered across three rows.
+namespace
+{
+struct MovementKey
+{
+	KeyBinding *GameSettings::*binding;
+	int_t desktopKey;
+	int_t nspireKey;
+};
+const MovementKey kMovementKeys[] = {
+	{&GameSettings::keyBindForward, lwjgl::Keyboard::KEY_W, lwjgl::Keyboard::KEY_B},
+	{&GameSettings::keyBindLeft, lwjgl::Keyboard::KEY_A, lwjgl::Keyboard::KEY_H},
+	{&GameSettings::keyBindBack, lwjgl::Keyboard::KEY_S, lwjgl::Keyboard::KEY_I},
+	{&GameSettings::keyBindRight, lwjgl::Keyboard::KEY_D, lwjgl::Keyboard::KEY_J},
+};
+
+// Desktop defaults (fresh settings, or an options file saved by an older
+// build) become the calculator layout; a key the player chose stays.
+void applyMovementKeys(GameSettings& settings)
+{
+	bool changed = false;
+	for (const MovementKey& m : kMovementKeys)
+	{
+		KeyBinding *binding = settings.*(m.binding);
+		if (binding != nullptr && binding->keyCode == m.desktopKey)
+		{
+			binding->keyCode = m.nspireKey;
+			changed = true;
+		}
+	}
+	if (changed)
+		KeyBinding::resetKeyBindingArrayAndHash();
+}
+}
+
 void platformGameSettingsInitialize(GameSettings& settings)
 {
 	settings.renderDistance = PLATFORM_DEFAULT_RENDER_DISTANCE;
 	platformGameSettingsApplyLegacyCrafting(settings);
+	applyMovementKeys(settings);
 }
 void platformGameSettingsResetControlBindings(GameSettings&) {}
 int_t platformGameSettingsDefaultChunkUpdates() { return (int_t)PLATFORM_MAX_RENDERER_UPDATES_PER_FRAME; }
@@ -82,6 +120,7 @@ void platformGameSettingsFinalizeLoad(GameSettings& settings)
 		32 << (3 - settings.renderDistance));
 	settings.ofChunkUpdates = std::max(settings.ofChunkUpdates, (int_t)1);
 	platformGameSettingsApplyLegacyCrafting(settings);
+	applyMovementKeys(settings);
 }
 void platformGameSettingsSyncControllerBindings(const GameSettings&) {}
 void platformGameSettingsAddKnownKeys(std::unordered_set<std::string>&) {}

@@ -60,3 +60,29 @@
 // (ChunkProviderGenerateLite.cpp) and the 3D Perlin octaves
 // (NoiseGeneratorPerlin.cpp) run in Q16 fixed point.
 #define PLATFORM_FIXED_TERRAIN_NOISE 1
+
+// Per-tick work around the player, PS2-sized: random display ticks only spawn
+// particles (1000 block probes a tick on the desktop), chunk lookups cached,
+// no clouds / weather particles / camera effects, cheap particle physics.
+#undef  PLATFORM_RANDOM_DISPLAY_PROBES
+#define PLATFORM_RANDOM_DISPLAY_PROBES        64
+#undef  PLATFORM_CACHE_RANDOM_DISPLAY_CHUNKS
+#define PLATFORM_CACHE_RANDOM_DISPLAY_CHUNKS  1
+#undef  PLATFORM_REUSE_RANDOM_DISPLAY_RNG
+#define PLATFORM_REUSE_RANDOM_DISPLAY_RNG     1
+#undef  PLATFORM_CACHE_RANDOM_TICK_CHUNKS
+#define PLATFORM_CACHE_RANDOM_TICK_CHUNKS     1
+#undef  PLATFORM_CACHE_SPAWN_CHUNKS
+#define PLATFORM_CACHE_SPAWN_CHUNKS           1
+#undef  PLATFORM_SKIP_CLOUDS
+#define PLATFORM_SKIP_CLOUDS                  1
+#undef  PLATFORM_SKIP_RAIN_SNOW
+#define PLATFORM_SKIP_RAIN_SNOW               1
+#undef  PLATFORM_SKIP_CAMERA_FX
+#define PLATFORM_SKIP_CAMERA_FX               1
+#undef  PLATFORM_FAST_PARTICLE_PHYSICS
+#define PLATFORM_FAST_PARTICLE_PHYSICS        1
+#undef  PLATFORM_MAX_PARTICLES_PER_LAYER
+#define PLATFORM_MAX_PARTICLES_PER_LAYER      128
+#undef  PLATFORM_CULL_MISSING_CHUNK_BOUNDARY_FACES
+#define PLATFORM_CULL_MISSING_CHUNK_BOUNDARY_FACES 1

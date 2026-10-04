@@ -157,6 +157,16 @@ std::unordered_map<int, std::unique_ptr<NglTexture>> g_textures;
 int g_nextTextureName = 1;
 bool g_initialized = false;
 
+// Half-resolution world pass (NglBackend::beginWorldPass).
+#ifndef _TINSPIRE
+const bool g_lowResWorld = std::getenv("NSPIRE_SIM_FULLRES") == nullptr;
+#else
+constexpr bool g_lowResWorld = true;
+#endif
+bool g_inWorldPass = false;
+std::vector<COLOR> g_lowResBuffer;
+COLOR* g_target = nullptr; // the buffer nGL draws into
+
 int currentStackIndex()
 {
     return g_state.matrixMode == 2 ? 2 + g_state.activeUnit : g_state.matrixMode;
@@ -235,6 +245,9 @@ void writeTexels(NglTexture& tex, int x0, int y0, int w, int h, const std::uint8
 // ---------------------------------------------------------------------------
 // Vertex processing
 // ---------------------------------------------------------------------------
+// Normal-word tag of a merged terrain face (mergeStoredFaces): repeated tile.
+constexpr std::uint32_t kTileTag = 0x80000000u;
+
 struct ClipVertex
 {
     std::int32_t x, y, z, w; // clip space, Q12
@@ -242,6 +255,7 @@ struct ClipVertex
     int r, g, b, a;          // lit colour, 0..255
     int fog;                 // fog visibility 0..256 (256 = clear)
     unsigned outcode;        // clip planes this vertex is outside of (bit per plane)
+    std::uint32_t tileTag;   // merged terrain face: repeated atlas tile (kTileTag)
     VERTEX screen;           // projected nGL vertex, valid when outcode == 0
 };
 
@@ -336,6 +350,7 @@ struct DrawSetup
     int constantLit[3] = {256, 256, 256};  // for meshes without per-vertex normals
     int texWidth = 0, texHeight = 0;
     int viewport[4] = {0, 0, 0, 0};
+    int screenHeight = 0;                  // of the current target
     std::int32_t depthOffset = 0;          // Q8, polygon offset
 };
 
@@ -414,7 +429,7 @@ VERTEX project(const DrawSetup& setup, const ClipVertex& c)
     const int* vp = setup.viewport;
     VERTEX out;
     out.x.value = (vp[0] << 8) + static_cast<std::int32_t>((static_cast<std::int64_t>(ndcX + 65536) * vp[2]) >> 9);
-    out.y.value = ((NspireSystem::kScreenHeight - vp[1]) << 8) -
+    out.y.value = ((setup.screenHeight - vp[1]) << 8) -
                   static_cast<std::int32_t>((static_cast<std::int64_t>(ndcY + 65536) * vp[3]) >> 9);
     std::int32_t depth = (ndcZ + 65536) >> 1; // 0..1 in Q16
     depth = depth < 0 ? 0 : (depth > 65536 ? 65536 : depth);
@@ -539,19 +554,40 @@ void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, co
                 t = NglFixed::fromFloat(uv[1], 16);
             }
         }
-        if (setup.textureMatrix)
+        // A merged terrain face carries its repeated tile in the normal word
+        // and texture coordinates in tile units (mergeStoredFaces).
+        out.tileTag = 0;
+        if (fixedData && !mesh.hasNormals)
         {
-            const std::int32_t* tm = setup.texMatrix;
-            const std::int32_t ns = NglFixed::mulShift(tm[0], s, 16) + NglFixed::mulShift(tm[2], t, 16) + tm[4];
-            const std::int32_t nt = NglFixed::mulShift(tm[1], s, 16) + NglFixed::mulShift(tm[3], t, 16) + tm[5];
-            s = ns;
-            t = nt;
+            const std::uint32_t tag = *reinterpret_cast<const std::uint32_t*>(base + mesh.normalOffset);
+            if (tag & kTileTag)
+                out.tileTag = tag;
         }
-        out.u = static_cast<std::int32_t>((static_cast<std::int64_t>(s) * setup.texWidth) >> 8);
-        out.v = static_cast<std::int32_t>((static_cast<std::int64_t>(t) * setup.texHeight) >> 8);
+        if (out.tileTag != 0)
+        {
+            const int tile = setup.texWidth >> 4;
+            out.u = static_cast<std::int32_t>((static_cast<std::int64_t>(s) * tile) >> 8);
+            out.v = static_cast<std::int32_t>((static_cast<std::int64_t>(t) * tile) >> 8);
+        }
+        else
+        {
+            if (setup.textureMatrix)
+            {
+                const std::int32_t* tm = setup.texMatrix;
+                const std::int32_t ns = NglFixed::mulShift(tm[0], s, 16) + NglFixed::mulShift(tm[2], t, 16) + tm[4];
+                const std::int32_t nt = NglFixed::mulShift(tm[1], s, 16) + NglFixed::mulShift(tm[3], t, 16) + tm[5];
+                s = ns;
+                t = nt;
+            }
+            out.u = static_cast<std::int32_t>((static_cast<std::int64_t>(s) * setup.texWidth) >> 8);
+            out.v = static_cast<std::int32_t>((static_cast<std::int64_t>(t) * setup.texHeight) >> 8);
+        }
     }
     else
+    {
         out.u = out.v = 0;
+        out.tileTag = 0;
+    }
 
     // Colour, in integers: vertex colour or current colour.
     if (mesh.hasColor)
@@ -715,11 +751,20 @@ bool culled(long long area)
     return (front && g_state.cullFront) || (!front && g_state.cullBack);
 }
 
+#ifndef _TINSPIRE
+// Host-only triangle accounting (NSPIRE_SIM_TRISTATS): why submitted triangles die.
+unsigned long g_triOutside = 0, g_triClipEmpty = 0, g_triCulled = 0, g_triDrawn = 0, g_triClipped = 0, g_triFaded = 0;
+#endif
 void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex& v1, const ClipVertex& v2)
 {
     ++g_stats.trianglesSubmitted;
     if ((v0.outcode & v1.outcode & v2.outcode) != 0)
+    {
+#ifndef _TINSPIRE
+        ++g_triOutside;
+#endif
         return; // entirely outside one plane
+    }
 
     // Flat colour for the whole triangle, in integers.
     int r = (v0.r + v1.r + v2.r) / 3;
@@ -782,17 +827,45 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
         ClipVertex scratch[9];
         count = clipPolygon(poly, 3, scratch, v0.outcode | v1.outcode | v2.outcode);
         if (count < 3)
+        {
+#ifndef _TINSPIRE
+            ++g_triClipEmpty;
+#endif
             return;
+        }
+#ifndef _TINSPIRE
+        ++g_triClipped;
+#endif
         for (int i = 0; i < count; ++i)
             nv[i] = project(setup, poly[i]);
     }
 
     if (culled(screenArea(nv[0], nv[1], nv[2])))
+    {
+#ifndef _TINSPIRE
+        ++g_triCulled;
+#endif
         return;
+    }
+#ifndef _TINSPIRE
+    ++g_triDrawn;
+#endif
 
     ngl_raster.blend = blendHalf;
     ngl_raster.fog_add = fogAdd;
     ngl_raster.modulate = modulate;
+    if (v0.tileTag != 0 && textured)
+    {
+        const int tile = setup.texWidth >> 4;
+        const int tileU = static_cast<int>((v0.tileTag >> 4) & 0xF), tileV = static_cast<int>(v0.tileTag & 0xF);
+        ngl_raster.tex_offset = tileU * tile + tileV * tile * setup.texture->stride;
+        ngl_raster.tile_mask = tile - 1;
+    }
+    else
+    {
+        ngl_raster.tex_offset = 0;
+        ngl_raster.tile_mask = 0;
+    }
     ++g_stats.trianglesDrawn;
     for (int i = 0; i < count; ++i)
         nv[i].c = vertexColor;
@@ -813,7 +886,7 @@ void drawLine(const DrawSetup& setup, const ClipVertex& a, const ClipVertex& b)
     const VERTEX s0 = project(setup, poly[0]);
     const VERTEX s1 = project(setup, poly[count - 1]);
     const COLOR c = color565(a.r, a.g, a.b);
-    COLOR* fb = NspireSystem::backBuffer();
+    COLOR* fb = g_target;
     const int x0 = s0.x.toInteger<int>(), y0 = s0.y.toInteger<int>();
     const int x1 = s1.x.toInteger<int>(), y1 = s1.y.toInteger<int>();
     const int z0 = s0.z.toInteger<int>(), z1 = s1.z.toInteger<int>();
@@ -823,7 +896,7 @@ void drawLine(const DrawSetup& setup, const ClipVertex& a, const ClipVertex& b)
     {
         const int x = x0 + dx * i / steps;
         const int y = y0 + dy * i / steps;
-        if (x < 0 || y < 0 || x >= NspireSystem::kScreenWidth || y >= NspireSystem::kScreenHeight)
+        if (x < 0 || y < 0 || x >= ngl_clip_w || y >= ngl_clip_h)
             continue;
         const int z = z0 + (z1 - z0) * i / steps - 64;
         if (g_state.depthTest && nglZBufferAt(x, y) <= GLFix(z))
@@ -903,6 +976,13 @@ bool prepareDraw(DrawSetup& setup)
     setup.lightmapS = NglFixed::fromFloat(g_state.lightmapCoord[0], 0);
     setup.lightmapT = NglFixed::fromFloat(g_state.lightmapCoord[1], 0);
     std::copy(g_state.viewport, g_state.viewport + 4, setup.viewport);
+    setup.screenHeight = NspireSystem::kScreenHeight;
+    if (g_inWorldPass)
+    {
+        for (int& v : setup.viewport)
+            v >>= 1;
+        setup.screenHeight >>= 1;
+    }
     setup.depthOffset = g_state.polygonOffset ? NglFixed::fromFloat(g_state.polygonOffsetUnits, 8) * 8 : 0;
 
     setup.fog = g_state.fog;
@@ -1193,6 +1273,249 @@ bool drawStoredMesh(const StoredMesh& stored)
     return drew || quad == 0;
 }
 
+// ---------------------------------------------------------------------------
+// Greedy face merging for terrain sections
+// ---------------------------------------------------------------------------
+// The calculator's cost is per triangle (transform, clip, setup), and terrain
+// is mostly flat runs of identical block faces. Within each face-direction
+// group, unit faces on the same plane with the same tile, colour and light are
+// merged into rectangles of up to kMergeMax x kMergeMax blocks. A merged quad
+// carries its tile in the otherwise unused normal word (kTileTag) and texture
+// coordinates in tile units; the rasteriser repeats the tile across it.
+// Textures interpolate affinely, so large merged quads swim slightly when seen
+// at a grazing angle -- accepted for the triangle count.
+constexpr int kMergeMax = 8;
+
+struct MergeFace
+{
+    float plane;
+    std::uint32_t colour;
+    std::uint32_t light;
+    int tileU, tileV;
+    std::uint16_t pattern; // per vertex: corner (a, b) and tile corner (u, v), 4 bits each
+    int a0, b0;
+    int quad;              // index in the source group
+    bool operator<(const MergeFace& o) const
+    {
+        if (plane != o.plane) return plane < o.plane;
+        if (colour != o.colour) return colour < o.colour;
+        if (light != o.light) return light < o.light;
+        if (tileU != o.tileU) return tileU < o.tileU;
+        if (tileV != o.tileV) return tileV < o.tileV;
+        if (pattern != o.pattern) return pattern < o.pattern;
+        if (b0 != o.b0) return b0 < o.b0;
+        return a0 < o.a0;
+    }
+    bool sameSurface(const MergeFace& o) const
+    {
+        return plane == o.plane && colour == o.colour && light == o.light && tileU == o.tileU && tileV == o.tileV &&
+               pattern == o.pattern;
+    }
+};
+
+inline float rawFloat(const std::int32_t* v, int i)
+{
+    float f;
+    std::memcpy(&f, v + i, sizeof(f));
+    return f;
+}
+
+inline void setRawFloat(std::int32_t* v, int i, float f)
+{
+    std::memcpy(v + i, &f, sizeof(f));
+}
+
+inline bool nearInt(float v, float target)
+{
+    const float d = v - target;
+    return d > -0.01f && d < 0.01f;
+}
+
+// Classifies one quad of an axis group; false if it is not a plain unit block
+// face with one tile, colour and light (slabs, cross plants, liquids, ...).
+bool classifyFace(const std::int32_t* q, int axis, MergeFace& f)
+{
+    const int a = (axis + 1) % 3, b = (axis + 2) % 3;
+    f.plane = rawFloat(q, axis);
+    f.colour = static_cast<std::uint32_t>(q[5]);
+    f.light = static_cast<std::uint32_t>(q[7]);
+    float amin = 1e9f, bmin = 1e9f, umin = 1e9f, vmin = 1e9f;
+    for (int k = 0; k < 4; ++k)
+    {
+        const std::int32_t* v = q + k * 8;
+        if (rawFloat(v, axis) != f.plane || static_cast<std::uint32_t>(v[5]) != f.colour ||
+            static_cast<std::uint32_t>(v[7]) != f.light || v[6] != 0)
+            return false;
+        amin = std::min(amin, rawFloat(v, a));
+        bmin = std::min(bmin, rawFloat(v, b));
+        umin = std::min(umin, rawFloat(v, 3));
+        vmin = std::min(vmin, rawFloat(v, 4));
+    }
+    f.a0 = static_cast<int>(std::floor(amin + 0.5f));
+    f.b0 = static_cast<int>(std::floor(bmin + 0.5f));
+    if (!nearInt(amin, static_cast<float>(f.a0)) || !nearInt(bmin, static_cast<float>(f.b0)) || f.a0 < 0 || f.a0 > 15 ||
+        f.b0 < 0 || f.b0 > 15)
+        return false;
+    f.tileU = static_cast<int>(std::floor(umin * 16.0f + 0.5f));
+    f.tileV = static_cast<int>(std::floor(vmin * 16.0f + 0.5f));
+    if (f.tileU < 0 || f.tileU > 15 || f.tileV < 0 || f.tileV > 15)
+        return false;
+    f.pattern = 0;
+    unsigned seen = 0;
+    for (int k = 0; k < 4; ++k)
+    {
+        const std::int32_t* v = q + k * 8;
+        const float ca = rawFloat(v, a) - static_cast<float>(f.a0);
+        const float cb = rawFloat(v, b) - static_cast<float>(f.b0);
+        const float cu = rawFloat(v, 3) * 16.0f - static_cast<float>(f.tileU);
+        const float cv = rawFloat(v, 4) * 16.0f - static_cast<float>(f.tileV);
+        int bits = 0;
+        for (const float c : {ca, cb, cu, cv})
+        {
+            bits <<= 1;
+            if (nearInt(c, 1.0f))
+                bits |= 1;
+            else if (!nearInt(c, 0.0f))
+                return false;
+        }
+        seen |= 1u << (bits >> 2); // corner (a, b)
+        f.pattern = static_cast<std::uint16_t>((f.pattern << 4) | bits);
+    }
+    return seen == 0xFu; // four distinct corners
+}
+
+// Merges the faces of one axis group; appends the result to `out`, returns the quad count.
+int mergeGroup(const std::int32_t* src, int quads, int axis, std::vector<std::int32_t>& out)
+{
+    const int a = (axis + 1) % 3, b = (axis + 2) % 3;
+    std::vector<MergeFace> faces;
+    faces.reserve(static_cast<std::size_t>(quads));
+    int emitted = 0;
+    for (int i = 0; i < quads; ++i)
+    {
+        MergeFace f;
+        const std::int32_t* q = src + static_cast<std::size_t>(i) * 32;
+        if (classifyFace(q, axis, f))
+        {
+            f.quad = i;
+            faces.push_back(f);
+        }
+        else
+        {
+            out.insert(out.end(), q, q + 32);
+            ++emitted;
+        }
+    }
+    std::sort(faces.begin(), faces.end());
+
+    int grid[16][16];
+    for (std::size_t start = 0; start < faces.size();)
+    {
+        std::size_t end = start + 1;
+        while (end < faces.size() && faces[end].sameSurface(faces[start]))
+            ++end;
+        for (auto& row : grid)
+            for (int& cell : row)
+                cell = -1;
+        for (std::size_t i = start; i < end; ++i)
+            grid[faces[i].b0][faces[i].a0] = static_cast<int>(i);
+
+        const MergeFace& surface = faces[start];
+        // Which merged extent the tile's u and v run along: compare the tile
+        // corners of the (0,0) and (1,0) block corners in the pattern.
+        int cornerU[4] = {}, cornerV[4] = {};
+        for (int k = 0; k < 4; ++k)
+        {
+            const int bits = (surface.pattern >> ((3 - k) * 4)) & 0xF;
+            cornerU[bits >> 2] = (bits >> 1) & 1;
+            cornerV[bits >> 2] = bits & 1;
+        }
+        // Corner index is (ca << 1) | cb: 0 = (0,0), 2 = (1,0).
+        const bool uAlongA = cornerU[0] != cornerU[2];
+        const bool vAlongA = cornerV[0] != cornerV[2];
+
+        for (int bb = 0; bb < 16; ++bb)
+            for (int aa = 0; aa < 16; ++aa)
+            {
+                const int first = grid[bb][aa];
+                if (first < 0)
+                    continue;
+                int w = 1;
+                while (aa + w < 16 && w < kMergeMax && grid[bb][aa + w] >= 0)
+                    ++w;
+                int h = 1;
+                while (bb + h < 16 && h < kMergeMax)
+                {
+                    bool full = true;
+                    for (int x = 0; x < w && full; ++x)
+                        full = grid[bb + h][aa + x] >= 0;
+                    if (!full)
+                        break;
+                    ++h;
+                }
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                        grid[bb + y][aa + x] = -1;
+
+                const std::int32_t* q = src + static_cast<std::size_t>(faces[first].quad) * 32;
+                ++emitted;
+                if (w == 1 && h == 1)
+                {
+                    out.insert(out.end(), q, q + 32);
+                    continue;
+                }
+                const std::uint32_t tag = kTileTag | (static_cast<std::uint32_t>(surface.tileU) << 4) |
+                                          static_cast<std::uint32_t>(surface.tileV);
+                const float extentU = static_cast<float>(uAlongA ? w : h);
+                const float extentV = static_cast<float>(vAlongA ? w : h);
+                for (int k = 0; k < 4; ++k)
+                {
+                    std::int32_t v[8];
+                    std::copy(q + k * 8, q + k * 8 + 8, v);
+                    const int bits = (surface.pattern >> ((3 - k) * 4)) & 0xF;
+                    const int ca = (bits >> 3) & 1, cb = (bits >> 2) & 1, cu = (bits >> 1) & 1, cv = bits & 1;
+                    setRawFloat(v, a, static_cast<float>(aa + ca * w));
+                    setRawFloat(v, b, static_cast<float>(bb + cb * h));
+                    setRawFloat(v, 3, static_cast<float>(cu) * extentU); // tile units
+                    setRawFloat(v, 4, static_cast<float>(cv) * extentV);
+                    v[6] = static_cast<std::int32_t>(tag);
+                    out.insert(out.end(), v, v + 8);
+                }
+            }
+        start = end;
+    }
+    return emitted;
+}
+
+// Rewrites a grouped terrain mesh (still float) with merged faces.
+void mergeStoredFaces(StoredMesh& stored)
+{
+    RenderCapturedMesh& mesh = stored.mesh;
+    std::vector<std::int32_t> out;
+    out.reserve(mesh.raw.size());
+    int quadStart = 0;
+    int total = 0;
+    for (int g = 0; g < RenderTerrainFaceGroups::kGroupCount; ++g)
+    {
+        const int quads = stored.groupQuads[g];
+        const std::int32_t* src = mesh.raw.data() + static_cast<std::size_t>(quadStart) * 32;
+        int emitted;
+        if (g < 6 && quads > 1)
+            emitted = mergeGroup(src, quads, g >> 1, out);
+        else
+        {
+            out.insert(out.end(), src, src + static_cast<std::size_t>(quads) * 32);
+            emitted = quads;
+        }
+        quadStart += quads;
+        stored.groupQuads[g] = emitted;
+        total += emitted;
+    }
+    mesh.raw.swap(out);
+    mesh.raw.shrink_to_fit();
+    mesh.vertexCount = total * 4;
+}
+
 std::unordered_map<int, StoredMesh> g_meshes;
 int g_nextMeshHandle = 1;
 std::size_t g_meshBytes = 0;
@@ -1240,6 +1563,7 @@ void initialize()
         return;
     nglInit();
     nglSetBuffer(NspireSystem::backBuffer());
+    g_target = NspireSystem::backBuffer();
     NglFixed::initExpTable();
     for (auto& stack : g_state.stacks)
         stack.assign(1, identityMatrix());
@@ -1249,7 +1573,46 @@ void initialize()
 
 void present()
 {
+    endWorldPass(); // a frame that ended inside the world pass
     NspireSystem::present();
+}
+
+void beginWorldPass()
+{
+    if (!g_initialized || !g_lowResWorld || g_inWorldPass)
+        return;
+    if (g_lowResBuffer.empty())
+        g_lowResBuffer.assign(static_cast<std::size_t>(NspireSystem::kScreenWidth) * NspireSystem::kScreenHeight, 0);
+    g_inWorldPass = true;
+    g_target = g_lowResBuffer.data();
+    nglSetBuffer(g_target);
+    ngl_clip_w = NspireSystem::kScreenWidth / 2;
+    ngl_clip_h = NspireSystem::kScreenHeight / 2;
+}
+
+void endWorldPass()
+{
+    if (!g_inWorldPass)
+        return;
+    g_inWorldPass = false;
+    // 2x2 pixel replication of the top-left quarter into the frame.
+    constexpr int kW = NspireSystem::kScreenWidth;
+    const COLOR* src = g_lowResBuffer.data();
+    COLOR* dst = NspireSystem::backBuffer();
+    for (int y = 0; y < NspireSystem::kScreenHeight / 2; ++y)
+    {
+        const COLOR* row = src + y * kW;
+        std::uint32_t* out = reinterpret_cast<std::uint32_t*>(dst + 2 * y * kW);
+        for (int x = 0; x < kW / 2; ++x)
+            out[x] = static_cast<std::uint32_t>(row[x]) * 0x00010001u;
+        std::memcpy(dst + (2 * y + 1) * kW, dst + 2 * y * kW, kW * sizeof(COLOR));
+    }
+    g_target = dst;
+    nglSetBuffer(dst);
+    ngl_clip_w = kW;
+    ngl_clip_h = NspireSystem::kScreenHeight;
+    // The GUI drawn next depth-tests against full-resolution coordinates.
+    glClear(GL_DEPTH_BUFFER_BIT);
 }
 
 void shutdown()
@@ -1312,8 +1675,6 @@ bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float 
         return false;
     }
     stored.mesh.raw.shrink_to_fit();
-    convertToFixed(stored.mesh);
-    g_meshBytes += stored.mesh.byteSize();
     stored.translation[0] = NglFixed::fromFloat(tx, NglFixed::kPosShift);
     stored.translation[1] = NglFixed::fromFloat(ty, NglFixed::kPosShift);
     stored.translation[2] = NglFixed::fromFloat(tz, NglFixed::kPosShift);
@@ -1334,6 +1695,10 @@ bool compileMesh(int handle, const RenderInterleavedMesh& mesh, float tx, float 
         stored.origin[2] = NglFixed::fromFloat(info->worldOriginZ, 8);
         stored.hasGroups = total * 4 == mesh.count;
     }
+    if (stored.hasGroups)
+        mergeStoredFaces(stored);
+    convertToFixed(stored.mesh);
+    g_meshBytes += stored.mesh.byteSize();
     return true;
 }
 
@@ -1378,6 +1743,12 @@ std::size_t textureBytes()
 
 Stats takeStats()
 {
+#ifndef _TINSPIRE
+    if (std::getenv("NSPIRE_SIM_TRISTATS"))
+        std::fprintf(stderr, "[tris] outside=%lu clipEmpty=%lu backface/zero=%lu clipped=%lu drawn=%lu\n", g_triOutside, g_triClipEmpty,
+                     g_triCulled, g_triClipped, g_triDrawn);
+    g_triOutside = g_triClipEmpty = g_triCulled = g_triDrawn = g_triClipped = 0;
+#endif
     const Stats s = g_stats;
     g_stats = Stats();
     return s;

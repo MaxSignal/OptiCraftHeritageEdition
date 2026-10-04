@@ -34,6 +34,12 @@ bool drawMesh(int handle);
 std::size_t meshBytes();
 std::size_t textureBytes();
 
+// The 3D world pass of a frame. While it is open, drawing goes to a
+// half-resolution target (a quarter of the pixels to fill); closing it scales
+// that up into the frame and clears depth for the GUI drawn on top.
+void beginWorldPass();
+void endWorldPass();
+
 // Draw counters since the last call (ClientProfilerBackend_NSPIRE logs them).
 struct Stats
 {

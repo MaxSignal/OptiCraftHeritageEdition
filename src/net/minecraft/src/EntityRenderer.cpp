@@ -3,6 +3,7 @@
 #include <cstdlib>
 #if PLATFORM_NSPIRE
 #include "nspire/NspireSystem.h"
+#include "nspire/render/NglBackend.h"
 #endif
 #if PLATFORM_PS2
 #include "ps2/minecraft/Ps2WeatherMath.h"
@@ -1406,6 +1407,9 @@ void EntityRenderer::updateCameraAndRender(float partialTicks)
         else
         {
             renderWorld(partialTicks, targetTime);
+#if PLATFORM_NSPIRE
+            NglBackend::endWorldPass();
+#endif
 
 #if PLATFORM_PS2
             renderSetLegacyPresentationGamma(false);
@@ -1702,7 +1706,11 @@ void EntityRenderer::renderWorld(float partialTicks, int64_t renderTimeLimitNano
         
         updateFogColor(partialTicks);
 
-
+#if PLATFORM_NSPIRE
+        // The 3D world is drawn at half resolution and scaled up when the
+        // frame's world pass ends (updateCameraAndRender); the GUI stays sharp.
+        NglBackend::beginWorldPass();
+#endif
         renderClear(RenderClearMask::Color | RenderClearMask::Depth);  // 16640
         
         renderEnable(RenderCapability::CullFace);

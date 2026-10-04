@@ -14,7 +14,7 @@ template <int PM>
 static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *high)
 {
     if((low->y < GLFix(0) && middle->y < GLFix(0) && high->y < GLFix(0))
-        || (low->y >= GLFix(SCREEN_HEIGHT) && middle->y >= GLFix(SCREEN_HEIGHT) && high->y >= GLFix(SCREEN_HEIGHT)))
+        || (low->y >= GLFix(ngl_clip_h) && middle->y >= GLFix(ngl_clip_h) && high->y >= GLFix(ngl_clip_h)))
         return;
 
     if(middle->y > high->y)
@@ -26,7 +26,7 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
     if(middle->y > high->y)
         std::swap(middle, high);
 
-    if(high->y < GLFix(0) || low->y >= GLFix(SCREEN_HEIGHT))
+    if(high->y < GLFix(0) || low->y >= GLFix(ngl_clip_h))
         return;
 
     // The ranges of values from here on allows using some more bits for precision:
@@ -131,8 +131,8 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
         #endif
     }
 
-    if(high_y >= SCREEN_HEIGHT)
-        high_y = SCREEN_HEIGHT - 1;
+    if(high_y >= ngl_clip_h)
+        high_y = ngl_clip_h - 1;
 
     int pitch = y * SCREEN_WIDTH;
     decltype(z_buffer) z_buf_line = z_buffer + pitch;
@@ -170,6 +170,11 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
     #endif
     const NGLRasterState rs = ngl_raster;
     const bool depth_test = PM == 0 ? rs.depth_test : ((PM - 1) & 1) != 0;
+    #ifdef TEXTURE_SUPPORT
+        const COLOR *tex_bits = loc_texture.bitmap + rs.tex_offset;
+        const int tu_mask = rs.tile_mask ? rs.tile_mask : u_mask;
+        const int tv_mask = rs.tile_mask ? rs.tile_mask : v_mask;
+    #endif
     const int depth_bias = rs.depth_bias;
 
     //If xstart will get smaller than xend
@@ -205,7 +210,7 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
                 if(__builtin_expect(!depth_test || TriFix(int(*z_buf) + depth_bias) > z, true))
                 {
                     #ifdef TEXTURE_SUPPORT
-                        COLOR c = loc_texture.bitmap[(u.floor() & u_mask) + (v.floor() & v_mask)*loc_texture.width];
+                        COLOR c = tex_bits[(u.floor() & tu_mask) + (v.floor() & tv_mask)*loc_texture.width];
                         #ifdef TRANSPARENCY
                             if(__builtin_expect(c != 0x0000, 1))
                                 ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, c, z, true);
@@ -302,7 +307,7 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
                 if(__builtin_expect(!depth_test || TriFix(int(*z_buf) + depth_bias) > z, true))
                 {
                     #ifdef TEXTURE_SUPPORT
-                        COLOR c = loc_texture.bitmap[(u.floor() & u_mask) + (v.floor() & v_mask)*loc_texture.width];
+                        COLOR c = tex_bits[(u.floor() & tu_mask) + (v.floor() & tv_mask)*loc_texture.width];
                         #ifdef TRANSPARENCY
                             if(__builtin_expect(c != 0x0000, 1))
                                 ngl_put_pixel_pm<PM>(rs, screen_buf, z_buf, c, z, true);

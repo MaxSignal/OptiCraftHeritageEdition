@@ -248,7 +248,7 @@
 #undef  PLATFORM_RANDOM_BLOCK_TICKS_PER_CHUNK
 #define PLATFORM_RANDOM_BLOCK_TICKS_PER_CHUNK    10
 #undef  PLATFORM_RANDOM_TICK_CHUNKS_PER_TICK
-#define PLATFORM_RANDOM_TICK_CHUNKS_PER_TICK     9
+#define PLATFORM_RANDOM_TICK_CHUNKS_PER_TICK     5
 
 // Entity CPU guardrails. Nspire keeps a higher budget than PS2, but caps
 // concurrent mobs and A* work tightly enough to avoid entity-driven tick
@@ -303,7 +303,7 @@
 #undef  PLATFORM_LIMIT_ENTITY_RENDER_DISTANCE
 #define PLATFORM_LIMIT_ENTITY_RENDER_DISTANCE    1
 #undef  PLATFORM_ENTITY_RENDER_RADIUS_BLOCKS
-#define PLATFORM_ENTITY_RENDER_RADIUS_BLOCKS     24.0f
+#define PLATFORM_ENTITY_RENDER_RADIUS_BLOCKS     20.0f
 
 // Entity-entity push resolution is only observable near the player; beyond
 // the render radius skip the chunk/AABB scan and keep everything else.
