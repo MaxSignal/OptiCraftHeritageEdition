@@ -53,9 +53,14 @@ int_t platformGameSettingsClampRenderDistance(int_t value)
 	return value < 2 ? 2 : (value > 3 ? 3 : value);
 }
 
+// The renderer grid is built from the fine distance (2 * fine / 16 + 1 sections
+// across), so it must follow the Tiny/Short choice: 32 or 64 blocks. Left at
+// the desktop default of 128 it built a 17x17 column grid, ~1150 sections
+// frustum-tested and scheduled every frame for a world that only streams a few
+// chunks around the player.
 int_t platformGameSettingsClampFineRenderDistance(int_t value)
 {
-	const int_t maxDistance = PLATFORM_VISIBLE_CHUNK_RADIUS * 16;
+	const int_t maxDistance = 64;
 	return value < 32 ? 32 : (value > maxDistance ? maxDistance : value);
 }
 
@@ -71,6 +76,10 @@ bool platformGameSettingsLoadOption(GameSettings&, const std::string&, const std
 void platformGameSettingsFinalizeLoad(GameSettings& settings)
 {
 	settings.renderDistance = platformGameSettingsClampRenderDistance(settings.renderDistance);
+	// GameSettings::setDefaults() assigns the desktop fine distance after
+	// platformGameSettingsInitialize(), and older option files saved it.
+	settings.ofRenderDistanceFine = platformGameSettingsClampFineRenderDistance(
+		32 << (3 - settings.renderDistance));
 	settings.ofChunkUpdates = std::max(settings.ofChunkUpdates, (int_t)1);
 	platformGameSettingsApplyLegacyCrafting(settings);
 }

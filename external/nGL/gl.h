@@ -218,6 +218,40 @@ static inline void ngl_put_pixel_pm(const NGLRasterState &rs, COLOR *screen_px, 
         *z_px = z;
 }
 
+// Exact integer division by small divisors through a reciprocal table
+// (ngl_init_divisors() fills it from nglInit()).
+#define NGL_DIV_TABLE 2048
+struct NGLDivisor
+{
+    uint64_t m;
+    uint32_t shift;
+};
+extern NGLDivisor ngl_divisors[NGL_DIV_TABLE];
+void ngl_init_divisors();
+
+// n / d with C's truncation toward zero.
+static inline int32_t ngl_div(const int32_t n, const int d)
+{
+    if(__builtin_expect(d > 0 && d < NGL_DIV_TABLE, 1))
+    {
+        const NGLDivisor &t = ngl_divisors[d];
+        const uint32_t a = n < 0 ? 0u - static_cast<uint32_t>(n) : static_cast<uint32_t>(n);
+        const uint32_t q = static_cast<uint32_t>(((static_cast<uint64_t>(a) * t.m) >> 32) >> t.shift);
+        return n < 0 ? -static_cast<int32_t>(q) : static_cast<int32_t>(q);
+    }
+    if(d < 0 && d > -NGL_DIV_TABLE)
+        return -ngl_div(n, -d);
+    return n / d;
+}
+
+template <typename F>
+static inline F ngl_divf(const F f, const int d)
+{
+    F r;
+    r.value = ngl_div(f.value, d);
+    return r;
+}
+
 extern MATRIX *transformation;
 
 RGB rgbColor(const COLOR c);

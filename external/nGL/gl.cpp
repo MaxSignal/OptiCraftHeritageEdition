@@ -35,8 +35,25 @@ static COLOR *screen_inverted; //For monochrome calcs
 #endif
 static int matrix_stack_left = MATRIX_STACK_SIZE;
 
+NGLDivisor ngl_divisors[NGL_DIV_TABLE];
+
+void ngl_init_divisors()
+{
+    for(int d = 1; d < NGL_DIV_TABLE; ++d)
+    {
+        uint32_t l = 0;
+        while((1u << l) < static_cast<uint32_t>(d))
+            ++l;
+        // ceil(2^(32 + l) / d); below 2^33, so n * m fits 64 bits for n < 2^31.
+        const uint64_t numerator = static_cast<uint64_t>(1) << (32 + l);
+        ngl_divisors[d].m = (numerator + static_cast<uint64_t>(d) - 1) / static_cast<uint64_t>(d);
+        ngl_divisors[d].shift = l;
+    }
+}
+
 void nglInit()
 {
+    ngl_init_divisors();
     init_fastmath();
     transformation = new MATRIX[MATRIX_STACK_SIZE];
 

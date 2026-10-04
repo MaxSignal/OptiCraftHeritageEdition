@@ -2284,13 +2284,13 @@ namespace
 		int_t worked = 0;
 		int_t maxUpdates = (int_t)PLATFORM_MAX_RENDERER_UPDATES_PER_FRAME;
 		long long spentUs = 0;
+		long long budgetUs = (long long)PLATFORM_CHUNK_BUILD_BUDGET_MS * 1000LL;
 
 		bool exhausted() const
 		{
 			if (worked >= maxUpdates)
 				return true;
-			return PLATFORM_CHUNK_BUILD_BUDGET_MS > 0 &&
-			       spentUs >= (long long)PLATFORM_CHUNK_BUILD_BUDGET_MS * 1000LL;
+			return budgetUs > 0 && spentUs >= budgetUs;
 		}
 
 		// Returns true when the renderer actually meshed, i.e. when the call
@@ -2316,6 +2316,13 @@ namespace
 		}
 	};
 }
+#endif
+
+#ifndef PLATFORM_NEAR_MESH_BUDGET_MS
+#define PLATFORM_NEAR_MESH_BUDGET_MS 0
+#endif
+#ifndef PLATFORM_NEAR_MESH_MAX_UPDATES
+#define PLATFORM_NEAR_MESH_MAX_UPDATES PLATFORM_MAX_RENDERER_UPDATES_PER_FRAME
 #endif
 
 #if PLATFORM_PS2 && defined(PS2_RENDER_STATS)
@@ -2474,6 +2481,27 @@ bool RenderGlobal::updateRenderers(EntityLiving *entityliving, bool flag)
 			rendererUpdateCandidates.begin() + sortedCandidateCount,
 			rendererUpdateCandidates.end(), rendererPriority);
 	}
+
+#if PLATFORM_NEAR_MESH_BUDGET_MS > 0
+	// A section in the player's own or a neighbouring column that is still
+	// unbuilt (or dirty) and on screen is a hole in the ground the player can
+	// see and walk into -- invisible terrain that still collides. Until those
+	// are filled the frame spends a larger budget on them; with the regular
+	// streaming budget a slow CPU could fall seconds behind walking speed.
+	for (std::size_t i = 0; i < sortedCandidateCount; ++i)
+	{
+		WorldRenderer *candidate = rendererUpdateCandidates[i];
+		if (candidate == nullptr || !candidate->needsUpdate)
+			continue;
+		const int_t ring = distanceRing(candidate);
+		if (ring <= 1 && (candidate->isInFrustum || ring == 0))
+		{
+			meshBudget.budgetUs = std::max(meshBudget.budgetUs, (long long)PLATFORM_NEAR_MESH_BUDGET_MS * 1000LL);
+			meshBudget.maxUpdates = std::max(meshBudget.maxUpdates, (int_t)PLATFORM_NEAR_MESH_MAX_UPDATES);
+			break;
+		}
+	}
+#endif
 
 	int_t attempted = 0;
 	int_t completed = 0;

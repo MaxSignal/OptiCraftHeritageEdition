@@ -56,6 +56,7 @@
 #undef  PLATFORM_DYNAMIC_TEXTURE_INTERVAL_TICKS
 #define PLATFORM_DYNAMIC_TEXTURE_INTERVAL_TICKS 4
 
-// Terrain noise in integers (NoiseGeneratorPerlin.cpp): the generator's inner
-// loop, ~60 float operations per sample, becomes 64-bit Q16 fixed point.
+// Terrain noise in integers: the heightmap generator's 2D noise
+// (ChunkProviderGenerateLite.cpp) and the 3D Perlin octaves
+// (NoiseGeneratorPerlin.cpp) run in Q16 fixed point.
 #define PLATFORM_FIXED_TERRAIN_NOISE 1

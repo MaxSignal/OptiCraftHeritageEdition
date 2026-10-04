@@ -1,4 +1,9 @@
 #include "EntityRenderer.h"
+#include <cmath>
+#include <cstdlib>
+#if PLATFORM_NSPIRE
+#include "nspire/NspireSystem.h"
+#endif
 #if PLATFORM_PS2
 #include "ps2/minecraft/Ps2WeatherMath.h"
 #include "ps2/diagnostics/Ps2OptimizationValidation.h"
@@ -2741,6 +2746,36 @@ void EntityRenderer::updateFogColor(float partialTicks)
         fogColorBlue = grayB;
     }
 
+#if PLATFORM_NSPIRE
+    // Device diagnostics for the sky flicker: log every frame whose clear
+    // colour jumps against the previous one (a limited number per session),
+    // with everything that feeds it. The host simulator logs every frame with
+    // NSPIRE_SIM_FOGTRACE.
+    {
+        static float s_lastFog[3] = {-1.0f, -1.0f, -1.0f};
+        static int s_fogReports = 0;
+        const float jump = std::fabs(fogColorRed - s_lastFog[0]) + std::fabs(fogColorGreen - s_lastFog[1]) +
+                           std::fabs(fogColorBlue - s_lastFog[2]);
+#ifndef _TINSPIRE
+        static const bool everyFrame = std::getenv("NSPIRE_SIM_FOGTRACE") != nullptr;
+#else
+        constexpr bool everyFrame = false;
+#endif
+        if (everyFrame || (s_lastFog[0] >= 0.0f && jump > 0.3f && s_fogReports < 60))
+        {
+            ++s_fogReports;
+            NspireSystem::log("[fog] pt=%.3f sky=%.2f,%.2f,%.2f bright=%.3f/%.3f void=%.3f y=%.2f last=%.2f x=%.2f z=%.2f "
+                              "ground=%d view=%d rain=%.2f out=%.3f,%.3f,%.3f prev=%.3f,%.3f,%.3f\n",
+                              partialTicks, skyR, skyG, skyB, fogColor2, fogColor1, (float)voidFog,
+                              (float)entityliving->posY, (float)entityliving->lastTickPosY, (float)entityliving->posX,
+                              (float)entityliving->posZ, (int)entityliving->onGround, viewpointBlockId, rainStrength,
+                              fogColorRed, fogColorGreen, fogColorBlue, s_lastFog[0], s_lastFog[1], s_lastFog[2]);
+        }
+        s_lastFog[0] = fogColorRed;
+        s_lastFog[1] = fogColorGreen;
+        s_lastFog[2] = fogColorBlue;
+    }
+#endif
     renderClearColor(fogColorRed, fogColorGreen, fogColorBlue, 0.0f);
 }
 

@@ -24,6 +24,9 @@
 //                       multiplied by this factor, so per-frame time budgets
 //                       (chunk builds, ticks) run out mid-way as they do on the
 //                       calculator. Ignored when NSPIRE_SIM_FRAME_MS is set.
+//   NSPIRE_SIM_SLOWDOWN_FROM  with NSPIRE_SIM_FRAME_MS: switch from the virtual
+//                       clock to the NSPIRE_SIM_SLOWDOWN scaled clock at this
+//                       presented frame (scripted menus, then real-ish timing).
 #if defined(NSPIRE_PLATFORM) && !defined(_TINSPIRE)
 
 #include "nspire/NspireSystem.h"
@@ -70,6 +73,8 @@ std::uint64_t g_virtualUs = 0;   // virtual clock, advanced per frame and per re
 constexpr std::uint64_t kVirtualEpochSec = 1790000000ull;
 
 long g_slowdown = 0;              // 0: off
+long g_pendingSlowdown = 0;       // NSPIRE_SIM_SLOWDOWN_FROM
+long g_slowdownFrom = 0;
 std::uint64_t g_realStartUs = 0;
 
 std::uint64_t kernelMonotonicUs()
@@ -200,7 +205,13 @@ void initialize(int argc, char** argv)
         g_dumpEvery = std::atol(every);
     if (const char* frameMs = env("NSPIRE_SIM_FRAME_MS"))
         g_frameMs = std::atol(frameMs);
-    if (const char* slowdown = env("NSPIRE_SIM_SLOWDOWN"))
+    if (const char* from = env("NSPIRE_SIM_SLOWDOWN_FROM"))
+    {
+        g_slowdownFrom = std::atol(from);
+        if (const char* slowdown = env("NSPIRE_SIM_SLOWDOWN"))
+            g_pendingSlowdown = std::atol(slowdown);
+    }
+    else if (const char* slowdown = env("NSPIRE_SIM_SLOWDOWN"))
     {
         if (g_frameMs <= 0 && std::atol(slowdown) > 0)
         {
@@ -240,6 +251,14 @@ void present()
     ++g_frame;
     if (g_frameMs > 0)
         g_virtualUs += static_cast<std::uint64_t>(g_frameMs) * 1000u;
+    if (g_pendingSlowdown > 0 && g_frame == g_slowdownFrom)
+    {
+        // Continue from the virtual time so the clock stays monotonic.
+        g_slowdown = g_pendingSlowdown;
+        g_pendingSlowdown = 0;
+        g_realStartUs = kernelMonotonicUs() - g_virtualUs / static_cast<std::uint64_t>(g_slowdown);
+        g_frameMs = 0;
+    }
     static const bool trace = env("NSPIRE_SIM_TRACE") != nullptr;
     if (trace)
         std::fprintf(stderr, "[frame %ld presented]\n", g_frame);

@@ -40,28 +40,28 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
 
     const int height_upper = high_y - middle_y;
 
-    const TriFix dx_upper = TriFix(high->x - middle->x) / height_upper;
-    const TriFix dz_upper = TriFix(high->z - middle->z) / height_upper;
+    const TriFix dx_upper = ngl_divf(TriFix(high->x - middle->x), height_upper);
+    const TriFix dz_upper = ngl_divf(TriFix(high->z - middle->z), height_upper);
 
     const int height_lower = middle_y - low_y + 1;
 
-    const TriFix dx_lower = TriFix(middle->x - low->x) / height_lower;
-    const TriFix dz_lower = TriFix(middle->z - low->z) / height_lower;
+    const TriFix dx_lower = ngl_divf(TriFix(middle->x - low->x), height_lower);
+    const TriFix dz_lower = ngl_divf(TriFix(middle->z - low->z), height_lower);
 
     const int height_far = high_y - low_y;
 
-    const TriFix dx_far = TriFix(high->x - low->x) / height_far;
-    const TriFix dz_far = TriFix(high->z - low->z) / height_far;
+    const TriFix dx_far = ngl_divf(TriFix(high->x - low->x), height_far);
+    const TriFix dz_far = ngl_divf(TriFix(high->z - low->z), height_far);
 
     #ifdef TEXTURE_SUPPORT
-        const TriFix du_upper = TriFix(high->u - middle->u) / height_upper;
-        const TriFix dv_upper = TriFix(high->v - middle->v) / height_upper;
+        const TriFix du_upper = ngl_divf(TriFix(high->u - middle->u), height_upper);
+        const TriFix dv_upper = ngl_divf(TriFix(high->v - middle->v), height_upper);
 
-        const TriFix du_lower = TriFix(middle->u - low->u) / height_lower;
-        const TriFix dv_lower = TriFix(middle->v - low->v) / height_lower;
+        const TriFix du_lower = ngl_divf(TriFix(middle->u - low->u), height_lower);
+        const TriFix dv_lower = ngl_divf(TriFix(middle->v - low->v), height_lower);
 
-        const TriFix du_far = TriFix(high->u - low->u) / height_far;
-        const TriFix dv_far = TriFix(high->v - low->v) / height_far;
+        const TriFix du_far = ngl_divf(TriFix(high->u - low->u), height_far);
+        const TriFix dv_far = ngl_divf(TriFix(high->v - low->v), height_far);
 
         TriFix ustart = low->u, uend = low->u;
         TriFix vstart = low->v, vend = low->v;
@@ -70,17 +70,17 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
         const RGB middle_rgb = rgbColor(middle->c);
         const RGB low_rgb = rgbColor(low->c);
 
-        const TriFix dr_upper = TriFix(high_rgb.r - middle_rgb.r) / height_upper;
-        const TriFix dg_upper = TriFix(high_rgb.g - middle_rgb.g) / height_upper;
-        const TriFix db_upper = TriFix(high_rgb.b - middle_rgb.b) / height_upper;
+        const TriFix dr_upper = ngl_divf(TriFix(high_rgb.r - middle_rgb.r), height_upper);
+        const TriFix dg_upper = ngl_divf(TriFix(high_rgb.g - middle_rgb.g), height_upper);
+        const TriFix db_upper = ngl_divf(TriFix(high_rgb.b - middle_rgb.b), height_upper);
 
-        const TriFix dr_lower = TriFix(middle_rgb.r - low_rgb.r) / height_lower;
-        const TriFix dg_lower = TriFix(middle_rgb.g - low_rgb.g) / height_lower;
-        const TriFix db_lower = TriFix(middle_rgb.b - low_rgb.b) / height_lower;
+        const TriFix dr_lower = ngl_divf(TriFix(middle_rgb.r - low_rgb.r), height_lower);
+        const TriFix dg_lower = ngl_divf(TriFix(middle_rgb.g - low_rgb.g), height_lower);
+        const TriFix db_lower = ngl_divf(TriFix(middle_rgb.b - low_rgb.b), height_lower);
 
-        const TriFix dr_far = TriFix(high_rgb.r - low_rgb.r) / height_far;
-        const TriFix dg_far = TriFix(high_rgb.g - low_rgb.g) / height_far;
-        const TriFix db_far = TriFix(high_rgb.b - low_rgb.b) / height_far;
+        const TriFix dr_far = ngl_divf(TriFix(high_rgb.r - low_rgb.r), height_far);
+        const TriFix dg_far = ngl_divf(TriFix(high_rgb.g - low_rgb.g), height_far);
+        const TriFix db_far = ngl_divf(TriFix(high_rgb.b - low_rgb.b), height_far);
 
         TriFix rstart = low_rgb.r, rend = low_rgb.r;
         TriFix gstart = low_rgb.g, gend = low_rgb.g;
@@ -182,7 +182,7 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
         const int line_width = x2 - x1;
         if(__builtin_expect(line_width >= 1, true))
         {
-            const auto inv_l = Fix<16, int32_t>(1) / line_width;
+            const auto inv_l = ngl_divf(Fix<16, int32_t>(1), line_width);
             const TriFix dz = (zend - zstart) * inv_l;
             TriFix z = zstart;
 
@@ -278,7 +278,7 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
         const int line_width = x1 - x2;
         if(__builtin_expect(line_width <= -1, true))
         {
-            const auto inv_l = Fix<16, int32_t>(1) / line_width;
+            const auto inv_l = ngl_divf(Fix<16, int32_t>(1), line_width);
             //Here are the differences
             const TriFix dz = (zend - zstart) * inv_l;
             TriFix z = zend;

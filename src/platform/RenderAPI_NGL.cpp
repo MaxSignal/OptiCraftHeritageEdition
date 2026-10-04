@@ -1141,7 +1141,12 @@ bool drawStoredMesh(const StoredMesh& stored)
     view.hasBrightness = stored.mesh.hasBrightness;
     view.brightnessOffset = stored.mesh.brightnessOffset;
 
-    if (!stored.hasGroups || !g_eyeValid)
+#ifndef _TINSPIRE
+    static const bool noFaceCull = std::getenv("NSPIRE_SIM_NOFACECULL") != nullptr;
+#else
+    constexpr bool noFaceCull = false;
+#endif
+    if (!stored.hasGroups || !g_eyeValid || noFaceCull)
     {
         view.first = 0;
         view.count = stored.mesh.vertexCount;

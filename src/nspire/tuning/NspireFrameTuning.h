@@ -68,11 +68,18 @@
 #define PLATFORM_URGENT_MESH_BUDGET_MS           10
 #undef  PLATFORM_CHUNK_BUILD_BUDGET_MS
 #define PLATFORM_CHUNK_BUILD_BUDGET_MS           20
+// Holes next to the player (RenderGlobal::updateRenderers): while a section in
+// the player's or a neighbouring column is unbuilt and on screen, spend up to
+// this much a frame on meshing. At 20 ms and one step a frame the calculator
+// fell seconds behind walking speed and the player walked on, and into,
+// terrain that was not drawn yet.
+#define PLATFORM_NEAR_MESH_BUDGET_MS             150
+#define PLATFORM_NEAR_MESH_MAX_UPDATES           8
 
 // Incremental terrain meshing. A Nspire section no longer compiles all 4096 blocks
 // in one updateRenderer() call. The block count is the deterministic fallback;
 // the microsecond ceiling trims unusually expensive AO/liquid steps.
-#define PLATFORM_NSPIRE_CHUNK_BUILD_BLOCKS_PER_STEP 256
+#define PLATFORM_NSPIRE_CHUNK_BUILD_BLOCKS_PER_STEP 1024
 #define PLATFORM_NSPIRE_CHUNK_BUILD_STEP_US         20000
 
 // Mesh warm-up after entering a local world. RenderGlobal creates its whole
