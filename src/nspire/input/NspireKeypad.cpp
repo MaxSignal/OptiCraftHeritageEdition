@@ -92,6 +92,8 @@ std::uint32_t g_padPressed = 0;
 // Creative inventory tabs, ( and ): consumed by their own reader.
 int g_pageSteps = 0;
 
+bool g_activity = false; // NspireKeypad::takeActivity
+
 bool pressed(int key, const bool* now) { return now[key] && !g_prev[key]; }
 bool released(int key, const bool* now) { return !now[key] && g_prev[key]; }
 
@@ -314,7 +316,16 @@ void poll(bool inMenu)
     if (pressed(NK_HOME, now))
         NspireSystem::requestExit();
 
+    for (int k = 0; k < NK_COUNT && !g_activity; ++k)
+        g_activity = now[k] || g_prev[k];
     std::copy(now, now + NK_COUNT, g_prev);
+}
+
+bool takeActivity()
+{
+    const bool activity = g_activity;
+    g_activity = false;
+    return activity;
 }
 
 bool pointerActive()

@@ -73,10 +73,17 @@ inline Reciprocal reciprocal(std::int32_t v)
     const int msb = 31 - __builtin_clz(static_cast<std::uint32_t>(v));
     const int sh = msb - 14; // move the top bit to bit 14
     const std::uint32_t vn = sh >= 0 ? static_cast<std::uint32_t>(v) >> sh : static_cast<std::uint32_t>(v) << -sh;
-    // r0 is within 2^-9 of 2^30 / vn; r0 + r0 * (2^30 - vn * r0) / 2^30 within ~2^-17.
+    // r0 is within 2^-9 of 2^30 / vn; r0 + r0 * (2^30 - vn * r0) / 2^30 within
+    // one unit, and the last step makes it exactly the division's floor: at
+    // w = 1.0 (every 2D draw) one unit short put GUI vertices a hair left of
+    // their pixel, which changed glyph span widths and garbled the text.
     const std::uint32_t r0 = g_recipTable[(vn >> 6) - 256];
     const std::int32_t e = static_cast<std::int32_t>((1u << 30) - vn * r0);
-    const std::uint32_t r = r0 + static_cast<std::uint32_t>((static_cast<std::int32_t>(r0) * (e >> 7)) >> 23);
+    std::uint32_t r = r0 + static_cast<std::uint32_t>((static_cast<std::int32_t>(r0) * (e >> 7)) >> 23);
+    if (vn * (r + 1) <= (1u << 30))
+        ++r;
+    else if (vn * r > (1u << 30))
+        --r;
     return {r, 30 + sh};
 }
 

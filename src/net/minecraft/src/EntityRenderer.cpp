@@ -4,6 +4,7 @@
 #if PLATFORM_NSPIRE
 #include "nspire/NspireSystem.h"
 #include "nspire/render/NglBackend.h"
+#include "nspire/input/NspireKeypad.h"
 #endif
 #if PLATFORM_PS2
 #include "ps2/minecraft/Ps2WeatherMath.h"
@@ -1448,8 +1449,35 @@ void EntityRenderer::updateCameraAndRender(float partialTicks)
     // [FIX CRÍTICO WII] Prevenir división por cero si fpsLimitChar es '\0' (0).
     // Si limitFramerate es 0 (ilimitado) o tiene un valor anómalo, establecemos 120L para evitar congelamiento fatal en PowerPC.
     const long limitFps = (fpsLimitChar > '\0') ? static_cast<long>(fpsLimitChar) : 120L;
-    
+
+#if PLATFORM_NSPIRE
+    // A screen over the world (inventory, chest, pause): the world and HUD
+    // behind it are drawn once and kept, and a frame with no key down or
+    // released since the last is not drawn at all -- the previous one stays
+    // on the screen. Every tenth frame is drawn anyway (a furnace's progress,
+    // a hurt flash in the hotbar under the inventory).
+    bool nspireBackdrop = false;
+    if (mc->theWorld != nullptr && mc->currentScreen != nullptr && !mc->isSplitScreenActive())
+    {
+        static int s_idleFrames = 0;
+        const bool activity = NspireKeypad::takeActivity();
+        if (NglBackend::hasBackdrop() && !activity && ++s_idleFrames < 10)
+        {
+            NglBackend::holdFrame();
+            return;
+        }
+        s_idleFrames = 0;
+        nspireBackdrop = NglBackend::restoreBackdrop();
+    }
+    else
+    {
+        NglBackend::dropBackdrop();
+        NspireKeypad::takeActivity();
+    }
+    if (mc->theWorld != nullptr && !nspireBackdrop)
+#else
     if (mc->theWorld != nullptr)
+#endif
     {
 #if PLATFORM_PS2
         renderSetLegacyPresentationGamma(mc->gameSettings != nullptr && mc->gameSettings->legacyLook);
@@ -1513,8 +1541,18 @@ void EntityRenderer::updateCameraAndRender(float partialTicks)
                 platformProfileDrawCategory(PlatformDrawCategory::Gui, hudDrawStart);
 #endif
             }
+#if PLATFORM_NSPIRE
+            if (mc->currentScreen != nullptr)
+                NglBackend::saveBackdrop();
+#endif
         }
     }
+#if PLATFORM_NSPIRE
+    else if (nspireBackdrop)
+    {
+        // The world and HUD came from the backdrop.
+    }
+#endif
     else
     {
         // Menu principal / sin mundo

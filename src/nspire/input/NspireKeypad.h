@@ -34,6 +34,9 @@ std::uint32_t padHeld();
 std::uint32_t padPressed(); // consumes
 // Creative inventory tab steps from ( and ) since the last call (consumes).
 int consumePageSteps();
+// True when a key was down, or went up, in a poll since the last call
+// (consumes): nothing on a screen over the world can have changed otherwise.
+bool takeActivity();
 // Move the software cursor (keyboard selection follows the pointer on consoles).
 void setCursor(int x, int y);
 // Calculator key label for a lwjgl key code, or null if it has none.

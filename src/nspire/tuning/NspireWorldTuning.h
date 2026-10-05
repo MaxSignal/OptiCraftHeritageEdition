@@ -222,13 +222,13 @@
 #undef  PLATFORM_CHUNK_UNLOAD_RADIUS
 #define PLATFORM_CHUNK_UNLOAD_RADIUS             4
 
-// 3 (from 4): the per-chunk fixed cost of the random-tick sweep (cave-sound
-// light probe, snow/ice findTopSolidBlock + biome lookup) runs on 49 columns
-// instead of 81. Block ticks per world tick are set by
-// PLATFORM_RANDOM_BLOCK_TICKS_PER_CHUNK below and are unchanged; what stops
-// is simulation of the outer ring the player cannot see at SHORT.
+// Radius 1: the per-chunk fixed cost of the random-tick sweep (cave-sound
+// light probe, snow/ice findTopSolidBlock + biome lookup) runs on the 9
+// columns of the one-chunk view. Block ticks per chunk are set by
+// PLATFORM_RANDOM_BLOCK_TICKS_PER_CHUNK below; what stops is simulation of
+// the rings the player cannot see.
 #undef  PLATFORM_RANDOM_TICK_CHUNK_RADIUS
-#define PLATFORM_RANDOM_TICK_CHUNK_RADIUS 2
+#define PLATFORM_RANDOM_TICK_CHUNK_RADIUS 1
 
 // Spread the fixed per-chunk weather/cave work across ticks and reduce the
 // random block-update rate from the desktop's 80 per resident chunk. With the
@@ -237,8 +237,11 @@
 // quarter, and the round-robin preserves that chosen total rate.
 #undef  PLATFORM_RANDOM_BLOCK_TICKS_PER_CHUNK
 #define PLATFORM_RANDOM_BLOCK_TICKS_PER_CHUNK    10
+// 1 and 3 (from 2 and 5): the device log showed this sweep at 4-16 ms a
+// tick (leaf decay, grass spread and the lighting they set off), and only the
+// 3x3 columns of the one-chunk view are ever seen.
 #undef  PLATFORM_RANDOM_TICK_CHUNKS_PER_TICK
-#define PLATFORM_RANDOM_TICK_CHUNKS_PER_TICK     5
+#define PLATFORM_RANDOM_TICK_CHUNKS_PER_TICK     3
 
 // Entity CPU guardrails. Nspire keeps a higher budget than PS2, but caps
 // concurrent mobs and A* work tightly enough to avoid entity-driven tick
@@ -370,6 +373,26 @@
 #define PLATFORM_GENERATE_SYNC_RADIUS            0
 #undef  PLATFORM_GENERATE_CHUNKS_PER_TICK
 #define PLATFORM_GENERATE_CHUNKS_PER_TICK        1
+
+// Staged generation, as on the PS2 (Ps2WorldTuning.h): a chunk outside the
+// player's own column is generated a stage at a time (terrain, caves in
+// source-column slices, ravines, structures, build, skylight) within a time
+// budget per tick, instead of in one ~200 ms call -- the device log's largest
+// single hitches while exploring.
+#undef  PLATFORM_INCREMENTAL_CHUNK_GENERATION
+#define PLATFORM_INCREMENTAL_CHUNK_GENERATION    1
+#undef  PLATFORM_GENERATION_STEPS_PER_TICK
+#define PLATFORM_GENERATION_STEPS_PER_TICK       16
+#undef  PLATFORM_GENERATION_BUDGET_US
+#define PLATFORM_GENERATION_BUDGET_US            6000
+#undef  PLATFORM_GENERATION_STEPS_PER_FRAME
+#define PLATFORM_GENERATION_STEPS_PER_FRAME      0
+#undef  PLATFORM_GENERATION_FRAME_BUDGET_US
+#define PLATFORM_GENERATION_FRAME_BUDGET_US      0
+#undef  PLATFORM_GENERATION_SOURCE_COLUMNS_PER_STEP
+#define PLATFORM_GENERATION_SOURCE_COLUMNS_PER_STEP 16
+#undef  PLATFORM_STRUCTURE_SOURCE_COLUMNS_PER_STEP
+#define PLATFORM_STRUCTURE_SOURCE_COLUMNS_PER_STEP  289
 
 // Deferred decoration, 1 chunk per world tick.
 //

@@ -87,6 +87,40 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
         TriFix bstart = low_rgb.b, bend = low_rgb.b;
     #endif
 
+    // Coverage (OptiCraft): each row's span ends come from the edges' own end
+    // points at the row centre, not from per-row accumulation over integer-
+    // snapped heights. Two triangles sharing an edge then agree on it to the
+    // pixel and neither leaves a crack (the sky showed through between blocks)
+    // nor draws the other's pixels. A row r is covered where low <= r + 0.5 <
+    // high, a pixel x where left <= x + 0.5 < right. The interpolated depth and
+    // texture coordinates keep their accumulators below.
+    const int32_t ex_ly = low->y.value, ex_my = middle->y.value, ex_hy = high->y.value; // Q8
+    const int32_t ex_lx = low->x.value, ex_mx = middle->x.value, ex_hx = high->x.value;
+    const auto ex_slope = [](int32_t dx, int32_t dy) -> int32_t { // Q12 per row
+        return dy > 0 ? (dx << 12) / dy : 0;
+    };
+    const int32_t ex_far = ex_slope(ex_hx - ex_lx, ex_hy - ex_ly);
+    const int32_t ex_lower = ex_slope(ex_mx - ex_lx, ex_my - ex_ly);
+    const int32_t ex_upper = ex_slope(ex_hx - ex_mx, ex_hy - ex_my);
+    const int ex_first = (ex_ly + 127) >> 8, ex_last = ((ex_hy + 127) >> 8) - 1;
+    // Pixel column of an edge position in Q12: the first pixel centre at or
+    // right of it. The right-hand screen clip puts vertices on the last pixel
+    // column (interpolateVertexXRight), which still has to be filled.
+    const int ex_right_clip = (ngl_clip_w - 1) << 12;
+    const auto ex_column = [ex_right_clip](int32_t xq12) -> int {
+        return xq12 >= ex_right_clip ? ngl_clip_w : (xq12 + 2047) >> 12;
+    };
+    const auto ex_far_x = [&](int row) -> int32_t {
+        const int32_t yc = (row << 8) + 128;
+        return (ex_lx << 4) + static_cast<int32_t>((static_cast<int64_t>(yc - ex_ly) * ex_far) >> 8);
+    };
+    const auto ex_short_x = [&](int row) -> int32_t {
+        const int32_t yc = (row << 8) + 128;
+        if(yc < ex_my)
+            return (ex_lx << 4) + static_cast<int32_t>((static_cast<int64_t>(yc - ex_ly) * ex_lower) >> 8);
+        return (ex_mx << 4) + static_cast<int32_t>((static_cast<int64_t>(yc - ex_my) * ex_upper) >> 8);
+    };
+
     int y = low_y;
     TriFix xstart = low->x, zstart = low->z, xend = low->x, zend = low->z;
 
@@ -183,7 +217,9 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
 
     for(; y <= high_y; y += 1, z_buf_line += SCREEN_WIDTH, screen_buf_line += SCREEN_WIDTH)
     {
-        const int x1 = xstart, x2 = xend;
+        const bool ex_row = y >= ex_first && y <= ex_last;
+        const int x1 = ex_row ? ex_column(ex_far_x(y)) : 0;
+        const int x2 = ex_row ? ex_column(ex_short_x(y)) : 0;
         const int line_width = x2 - x1;
         if(__builtin_expect(line_width >= 1, true))
         {
@@ -279,7 +315,9 @@ static void NGL_TRI_IMPL(const VERTEX *low, const VERTEX *middle, const VERTEX *
     otherway:
     for(; y <= high_y; y += 1, screen_buf_line += SCREEN_WIDTH, z_buf_line += SCREEN_WIDTH)
     {
-        const int x1 = xend, x2 = xstart;
+        const bool ex_row = y >= ex_first && y <= ex_last;
+        const int x1 = ex_row ? ex_column(ex_short_x(y)) : 0;
+        const int x2 = ex_row ? ex_column(ex_far_x(y)) : 0;
         const int line_width = x1 - x2;
         if(__builtin_expect(line_width <= -1, true))
         {

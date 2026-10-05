@@ -54,6 +54,16 @@ void endWorldPass();
 bool hudBegin(std::uint32_t stateKey, bool cacheable);
 bool hudEnd();
 
+// The frame behind a screen opened over the world (inventory, chest, pause):
+// saved once after the world and HUD are drawn, then copied back each frame
+// instead of drawing them again.
+bool hasBackdrop();
+void saveBackdrop();
+bool restoreBackdrop(); // false when none is saved
+void dropBackdrop();
+// Nothing was drawn this frame: the next present() leaves the screen as is.
+void holdFrame();
+
 // Draw counters since the last call (ClientProfilerBackend_NSPIRE logs them).
 struct Stats
 {

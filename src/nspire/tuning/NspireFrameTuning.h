@@ -73,7 +73,9 @@
 // this much a frame on meshing. At 20 ms and one step a frame the calculator
 // fell seconds behind walking speed and the player walked on, and into,
 // terrain that was not drawn yet.
-#define PLATFORM_NEAR_MESH_BUDGET_MS             150
+// 60 (from 150): only true holes trigger it now, and a 150 ms frame each time
+// a chunk border is crossed was one of the hitches in the device log.
+#define PLATFORM_NEAR_MESH_BUDGET_MS             60
 #define PLATFORM_NEAR_MESH_MAX_UPDATES           8
 
 // Incremental terrain meshing. A Nspire section no longer compiles all 4096 blocks

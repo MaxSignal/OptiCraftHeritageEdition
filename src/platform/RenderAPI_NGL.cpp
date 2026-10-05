@@ -401,7 +401,29 @@ struct MatrixCache
 {
     unsigned mvSerial = 0, projSerial = 0;
     FixedMatrix mv, proj, mvp;
+    // Orthographic projection (the GUI): the product again with every term in
+    // Q24. Q16 holds 2/320 only to 0.25% and the Q12 translations to 1/4096,
+    // enough to put a glyph's edges a hair off their pixels; the rasteriser
+    // then got span widths of 7 or 9 for 8-texel glyphs and the text came out
+    // garbled. Exact here, a pixel coordinate lands on the pixel.
+    bool ortho = false;
+    std::int32_t mvpHi[16] = {};
 } g_matrixCache;
+
+constexpr int kHiShift = 24;
+
+void orthoProductHi(const Mat4& proj, const Mat4& mv, std::int32_t out[16])
+{
+    for (int c = 0; c < 4; ++c)
+        for (int row = 0; row < 4; ++row)
+        {
+            double sum = 0.0;
+            for (int k = 0; k < 4; ++k)
+                sum += static_cast<double>(proj.m[k * 4 + row]) * mv.m[c * 4 + k];
+            const double scaled = sum * static_cast<double>(1 << kHiShift);
+            out[c * 4 + row] = static_cast<std::int32_t>(scaled < 0.0 ? scaled - 0.5 : scaled + 0.5);
+        }
+}
 
 void bumpCurrentMatrix() { ++g_matrixSerial[currentStackIndex()]; }
 
@@ -409,6 +431,8 @@ struct DrawSetup
 {
     FixedMatrix mv;
     FixedMatrix mvp;
+    bool ortho = false;          // positions from mvpHi (see MatrixCache)
+    std::int32_t mvpHi[16] = {}; // Q24, translation included
     const NglTexture* texture = nullptr;
     const NglTexture* lightmap = nullptr;
     bool textureMatrix = false;
@@ -592,16 +616,34 @@ void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, co
         pz = NglFixed::fromFloat(f[2], NglFixed::kPosShift);
     }
 
-    // Q16 matrix * Q12 position = Q28; >> 16 gives Q12 clip coordinates.
-    const std::int32_t* m = setup.mvp.m;
-    out.x = static_cast<std::int32_t>((static_cast<std::int64_t>(m[0]) * px + static_cast<std::int64_t>(m[4]) * py +
-                                       static_cast<std::int64_t>(m[8]) * pz) >> 16) + m[12];
-    out.y = static_cast<std::int32_t>((static_cast<std::int64_t>(m[1]) * px + static_cast<std::int64_t>(m[5]) * py +
-                                       static_cast<std::int64_t>(m[9]) * pz) >> 16) + m[13];
-    out.z = static_cast<std::int32_t>((static_cast<std::int64_t>(m[2]) * px + static_cast<std::int64_t>(m[6]) * py +
-                                       static_cast<std::int64_t>(m[10]) * pz) >> 16) + m[14];
-    out.w = static_cast<std::int32_t>((static_cast<std::int64_t>(m[3]) * px + static_cast<std::int64_t>(m[7]) * py +
-                                       static_cast<std::int64_t>(m[11]) * pz) >> 16) + (m[15] >> 4);
+    if (setup.ortho)
+    {
+        // Q24 matrix * Q12 position = Q36, rounded to Q12.
+        const std::int32_t* h = setup.mvpHi;
+        const auto row = [&](int r) {
+            return static_cast<std::int32_t>((static_cast<std::int64_t>(h[r]) * px + static_cast<std::int64_t>(h[4 + r]) * py +
+                                              static_cast<std::int64_t>(h[8 + r]) * pz +
+                                              (static_cast<std::int64_t>(h[12 + r]) << NglFixed::kPosShift) +
+                                              (std::int64_t(1) << (kHiShift - 1))) >> kHiShift);
+        };
+        out.x = row(0);
+        out.y = row(1);
+        out.z = row(2);
+        out.w = row(3);
+    }
+    else
+    {
+        // Q16 matrix * Q12 position = Q28; >> 16 gives Q12 clip coordinates.
+        const std::int32_t* m = setup.mvp.m;
+        out.x = static_cast<std::int32_t>((static_cast<std::int64_t>(m[0]) * px + static_cast<std::int64_t>(m[4]) * py +
+                                           static_cast<std::int64_t>(m[8]) * pz) >> 16) + m[12];
+        out.y = static_cast<std::int32_t>((static_cast<std::int64_t>(m[1]) * px + static_cast<std::int64_t>(m[5]) * py +
+                                           static_cast<std::int64_t>(m[9]) * pz) >> 16) + m[13];
+        out.z = static_cast<std::int32_t>((static_cast<std::int64_t>(m[2]) * px + static_cast<std::int64_t>(m[6]) * py +
+                                           static_cast<std::int64_t>(m[10]) * pz) >> 16) + m[14];
+        out.w = static_cast<std::int32_t>((static_cast<std::int64_t>(m[3]) * px + static_cast<std::int64_t>(m[7]) * py +
+                                           static_cast<std::int64_t>(m[11]) * pz) >> 16) + (m[15] >> 4);
+    }
 
     if (setup.fog)
     {
@@ -1107,13 +1149,26 @@ bool prepareDraw(DrawSetup& setup)
         cache.mvp = multiply(cache.proj, cache.mv);
         cache.mvSerial = g_matrixSerial[0];
         cache.projSerial = g_matrixSerial[1];
+        const Mat4& proj = g_state.stacks[1].back();
+        cache.ortho = proj.m[3] == 0.0f && proj.m[7] == 0.0f && proj.m[11] == 0.0f && proj.m[15] == 1.0f;
+        if (cache.ortho)
+            orthoProductHi(proj, g_state.stacks[0].back(), cache.mvpHi);
     }
     setup.mv = cache.mv;
     setup.mvp = cache.mvp;
+    setup.ortho = cache.ortho;
+    if (setup.ortho)
+        std::copy(cache.mvpHi, cache.mvpHi + 16, setup.mvpHi);
     if (g_meshTranslate)
     {
         translateFixed(setup.mv, g_meshTranslation);
         translateFixed(setup.mvp, g_meshTranslation);
+        if (setup.ortho)
+            for (int row = 0; row < 4; ++row)
+                setup.mvpHi[12 + row] += static_cast<std::int32_t>(
+                    (static_cast<std::int64_t>(setup.mvpHi[row]) * g_meshTranslation[0] +
+                     static_cast<std::int64_t>(setup.mvpHi[4 + row]) * g_meshTranslation[1] +
+                     static_cast<std::int64_t>(setup.mvpHi[8 + row]) * g_meshTranslation[2]) >> NglFixed::kPosShift);
     }
 
     setup.texture = nullptr;
@@ -1957,11 +2012,52 @@ void initialize()
     g_initialized = true;
 }
 
+namespace
+{
+std::vector<COLOR> g_backdrop;
+bool g_backdropValid = false;
+bool g_holdFrame = false;
+}
+
 void present()
 {
     endWorldPass(); // a frame that ended inside the world pass
+    if (g_holdFrame)
+    {
+        g_holdFrame = false;
+#ifdef _TINSPIRE
+        return; // the LCD still shows this frame (the simulator still records it)
+#endif
+    }
     NspireSystem::present();
 }
+
+bool hasBackdrop() { return g_backdropValid; }
+
+void saveBackdrop()
+{
+    const COLOR* frame = NspireSystem::backBuffer();
+    g_backdrop.assign(frame, frame + static_cast<std::size_t>(NspireSystem::kScreenWidth) * NspireSystem::kScreenHeight);
+    g_backdropValid = true;
+}
+
+bool restoreBackdrop()
+{
+    if (!g_backdropValid)
+        return false;
+    std::copy(g_backdrop.begin(), g_backdrop.end(), NspireSystem::backBuffer());
+    return true;
+}
+
+void dropBackdrop()
+{
+    if (!g_backdropValid)
+        return;
+    g_backdropValid = false;
+    std::vector<COLOR>().swap(g_backdrop);
+}
+
+void holdFrame() { g_holdFrame = true; }
 
 void beginWorldPass()
 {

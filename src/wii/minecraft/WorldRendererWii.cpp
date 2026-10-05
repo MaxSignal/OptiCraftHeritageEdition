@@ -380,6 +380,15 @@ bool WorldRenderer::wiiBuildRendererStep(int_t blockBudget)
 
 		if (wiiBuildCursor < totalBlocks)
 			return false;
+#if defined(NSPIRE_PLATFORM)
+		// The pass's face sort, merge and compile run as a step of their own
+		// (the next call), not on top of the block step that just used up its
+		// time: together they were a frame well over the mesh budget.
+		if (processed > 0)
+			return false;
+		// Charged to the frame's mesh budget like a block step.
+		wiiStepDidWork = true;
+#endif
 
 		if (wiiBuildVertexCount[wiiBuildPass] > 0 && !wiiBuildRawBuffer[wiiBuildPass].empty())
 		{

@@ -152,8 +152,10 @@
 // serialized when it leaves the resident cache without forcing an immediate
 // Memory Card flush. Track gameplay edits separately from generation/lighting
 // dirtiness so walking does not turn every generated chunk into an I/O write.
+// The Nspire too: its flash writes were up to ~1 s hitches while walking; an
+// untouched chunk is regenerated identically when the player comes back.
 #ifndef PLATFORM_SAVE_RUNTIME_CHUNK_EDITS_ON_UNLOAD
-#  define PLATFORM_SAVE_RUNTIME_CHUNK_EDITS_ON_UNLOAD PLATFORM_PS2
+#  define PLATFORM_SAVE_RUNTIME_CHUNK_EDITS_ON_UNLOAD (PLATFORM_PS2 || PLATFORM_NSPIRE)
 #endif
 
 #ifndef PLATFORM_PROFILE_RENDER_PHASES

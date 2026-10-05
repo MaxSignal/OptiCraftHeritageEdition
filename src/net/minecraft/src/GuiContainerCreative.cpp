@@ -364,6 +364,15 @@ void GuiContainerCreative::keyTyped(char_t c, int_t key)
             return;
         }
     }
+#if PLATFORM_NSPIRE
+    // D and K, one above the other on the calculator's letter grid, scroll the
+    // item grid a row up and down: the scroll bar is pointer-only otherwise.
+    else if (key == lwjgl::Keyboard::KEY_D || key == lwjgl::Keyboard::KEY_K)
+    {
+        scrollRows(key == lwjgl::Keyboard::KEY_D ? -1 : 1);
+        return;
+    }
+#endif
     else if (key == lwjgl::Keyboard::KEY_X || key == lwjgl::Keyboard::KEY_DELETE)
     {
         EntityPlayer *p = getContainerPlayer();
@@ -436,6 +445,12 @@ Slot *GuiContainerCreative::getControllerNavigationTarget(Slot *selected, int_t 
     {
         if (row < 8)
             return inventorySlots->slots[(row + 1) * 8 + column];
+#if PLATFORM_NSPIRE
+        // Down from the last visible row scrolls first, as up from the first
+        // row does; the hotbar is reached once the list is at its end.
+        if (scrollRows(1))
+            return selected;
+#endif
         const int_t hotbarIndex = 72 + column;
         if (hotbarIndex < (int_t)inventorySlots->slots.size())
             return inventorySlots->slots[hotbarIndex];
