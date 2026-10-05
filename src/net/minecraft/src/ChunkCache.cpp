@@ -182,11 +182,36 @@ void ChunkCache::useDenseBlockIds(std::vector<std::uint8_t> &buffer, int_t x0, i
 		std::size_t n = 0;
 		for (int_t x = x0; x <= x1; ++x)
 			for (int_t z = z0; z <= z1; ++z)
+			{
+#if PLATFORM_FAST_CHUNK_BLOCK_READS
+				// One column at a time: the chunk cell and section are looked
+				// up once per 16 blocks instead of once per block.
+				if (fastBasesValid)
+				{
+					const int_t l = (x >> 4) - chunkX, i1 = (z >> 4) - chunkZ;
+					const bool inside = l >= 0 && l < chunkArrayWidth && i1 >= 0 && i1 < chunkArrayDepth;
+					const ExtendedBlockStorage *const *sections =
+						inside ? &sectionBase[cellIndex(l, i1) * WorldHeight::SECTION_COUNT] : nullptr;
+					for (int_t y = y0; y <= y1; ++y)
+					{
+						int_t id = 0;
+						if (sections != nullptr && y >= WorldHeight::MIN_Y && y < WorldHeight::HEIGHT)
+						{
+							const ExtendedBlockStorage *section = sections[y >> 4];
+							if (section != nullptr)
+								id = section->getExtBlockID(x & 0xf, y & 0xf, z & 0xf);
+						}
+						buffer[n++] = static_cast<std::uint8_t>(id > 255 ? 0 : id);
+					}
+					continue;
+				}
+#endif
 				for (int_t y = y0; y <= y1; ++y)
 				{
 					const int_t id = getBlockId(x, y, z);
 					buffer[n++] = static_cast<std::uint8_t>(id > 255 ? 0 : id);
 				}
+			}
 	}
 	denseIds = buffer.data();
 	denseX0 = x0;

@@ -157,6 +157,12 @@ private:
     int ps2TerrainLightBucket;
     bool ps2TerrainLightningActive;
 #endif
+#if defined(NSPIRE_PLATFORM)
+    // Inputs of the last lightmap built (updateLightmap skips identical rebuilds).
+    std::uint32_t nspireLightmapKey = 0;
+    const void* nspireLightmapProvider = nullptr;
+    bool nspireLightmapValid = false;
+#endif
     float torchFlickerX;
     float torchFlickerDX;
     float torchFlickerY;

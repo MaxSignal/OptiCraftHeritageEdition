@@ -238,24 +238,56 @@ bool WorldRenderer::wiiBuildRendererStep(int_t blockBudget)
 		nspireDenseValid = true;
 #endif
 		RenderBlocks renderblocks(&chunkcache);
+#if defined(NSPIRE_PLATFORM)
+		renderblocks.nspireOneSidedPlants = true;
+#endif
 		Tessellator *tessellator = &Tessellator::instance;
 		tessellator->startDrawingQuads();
 		tessellator->setTranslationD(-(double)posX, -(double)posY, -(double)posZ);
 
 		bool stepDrew = false;
+#if defined(NSPIRE_PLATFORM)
+		// 16^3 sections read their IDs and neighbours straight from the dense
+		// copy, with the cursor split by shifts: no virtual call, bounds check
+		// or (software) division per block.
+		const std::uint8_t *dense = chunkcache.denseSectionIds();
+		const bool denseScan = dense != nullptr && sizeWidth == 16 && sizeHeight == 16 && sizeDepth == 16;
+		bool opaqueId[256];
+		if (denseScan)
+		{
+			opaqueId[0] = false;
+			for (int_t n = 1; n < 256; ++n)
+			{
+				Block *b = n < Block::BLOCK_REGISTRY_SIZE ? Block::blocksList[n] : nullptr;
+				opaqueId[n] = b != nullptr && (Block::staticOpaqueCubeLookupSafe[n] ? Block::opaqueCubeLookup[n] : b->isOpaqueCube());
+			}
+		}
+#endif
 		while (wiiBuildCursor < totalBlocks && processed < blockBudget)
 		{
 			const int_t cursor = wiiBuildCursor++;
+#if defined(NSPIRE_PLATFORM)
+			const int_t lx = denseScan ? (cursor & 15) : cursor % sizeWidth;
+			const int_t yz = denseScan ? (cursor >> 4) : cursor / sizeWidth;
+			const int_t lz = denseScan ? (yz & 15) : yz % sizeDepth;
+			const int_t ly = denseScan ? (yz >> 4) : yz / sizeDepth;
+			const int_t denseIndex = ((lx + 1) * 18 + (lz + 1)) * 18 + (ly + 1);
+#else
 			const int_t lx = cursor % sizeWidth;
 			const int_t yz = cursor / sizeWidth;
 			const int_t lz = yz % sizeDepth;
 			const int_t ly = yz / sizeDepth;
+#endif
 			const int_t x = x0 + lx;
 			const int_t y = y0 + ly;
 			const int_t z = z0 + lz;
 			++processed;
 
+#if defined(NSPIRE_PLATFORM)
+			const int_t id = denseScan ? dense[denseIndex] : chunkcache.getBlockId(x, y, z);
+#else
 			const int_t id = chunkcache.getBlockId(x, y, z);
+#endif
 			if (id > 0)
 			{
 				if (wiiBuildPass == 0 && Block::isBlockContainer[id])
@@ -281,6 +313,20 @@ bool WorldRenderer::wiiBuildRendererStep(int_t blockBudget)
 #if PLATFORM_SKIP_ENCLOSED_OPAQUE_CUBES || PLATFORM_FAST_SIMPLE_CUBE_RENDER
 				if (wiiBuildPass == 0 && renderInfo.simpleOpaqueCube)
 				{
+#if defined(NSPIRE_PLATFORM)
+					if (denseScan)
+					{
+						std::uint8_t opaqueMask = 0;
+						if (opaqueId[dense[denseIndex - 1]]) opaqueMask |= 1u << WiiFaceDown;
+						if (opaqueId[dense[denseIndex + 1]]) opaqueMask |= 1u << WiiFaceUp;
+						if (opaqueId[dense[denseIndex - 18]]) opaqueMask |= 1u << WiiFaceNorth;
+						if (opaqueId[dense[denseIndex + 18]]) opaqueMask |= 1u << WiiFaceSouth;
+						if (opaqueId[dense[denseIndex - 18 * 18]]) opaqueMask |= 1u << WiiFaceWest;
+						if (opaqueId[dense[denseIndex + 18 * 18]]) opaqueMask |= 1u << WiiFaceEast;
+						exposedFaceMask = static_cast<std::uint8_t>((~opaqueMask) & kWiiAllCubeFaces);
+					}
+					else
+#endif
 					exposedFaceMask = wiiExposedCubeFaceMask(chunkcache, x, y, z);
 #if PLATFORM_SKIP_ENCLOSED_OPAQUE_CUBES
 					if (exposedFaceMask == 0)

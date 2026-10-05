@@ -40,6 +40,13 @@ public:
 	// renderSimpleOpaqueCubeWii for anything it does not cover.
 	bool renderSimpleOpaqueCubeNspire(Block *block, int_t i, int_t j, int_t k, unsigned char faceMask,
 		int_t lx, int_t ly, int_t lz);
+	// Terrain builds: crossed-square plants get one side per plane (the mesh's
+	// non-axis face group is drawn without back-face culling), tall grass a
+	// single plane. Half to a quarter of the vertices and triangles of plains,
+	// where tall grass is about half of everything drawn.
+	bool nspireOneSidedPlants = false;
+	int_t nspireTerrainColour(Block *block, int_t i, int_t j, int_t k);
+	int_t nspirePlantPlanes = 3; // bit 0: the (-x,-z)-(+x,+z) plane, bit 1: the other
 #endif
 #endif
 

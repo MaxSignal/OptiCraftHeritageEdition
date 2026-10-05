@@ -61,6 +61,11 @@ struct Reciprocal
     int k;
 };
 
+// 2^30 / v for v's top 8 bits (initRecipTable), refined by one Newton step:
+// the ARM9 has no divide instruction, and this runs once per projected vertex.
+extern std::uint32_t g_recipTable[256];
+void initRecipTable();
+
 inline Reciprocal reciprocal(std::int32_t v)
 {
     if (v <= 0)
@@ -68,7 +73,11 @@ inline Reciprocal reciprocal(std::int32_t v)
     const int msb = 31 - __builtin_clz(static_cast<std::uint32_t>(v));
     const int sh = msb - 14; // move the top bit to bit 14
     const std::uint32_t vn = sh >= 0 ? static_cast<std::uint32_t>(v) >> sh : static_cast<std::uint32_t>(v) << -sh;
-    return {(1u << 30) / vn, 30 + sh};
+    // r0 is within 2^-9 of 2^30 / vn; r0 + r0 * (2^30 - vn * r0) / 2^30 within ~2^-17.
+    const std::uint32_t r0 = g_recipTable[(vn >> 6) - 256];
+    const std::int32_t e = static_cast<std::int32_t>((1u << 30) - vn * r0);
+    const std::uint32_t r = r0 + static_cast<std::uint32_t>((static_cast<std::int32_t>(r0) * (e >> 7)) >> 23);
+    return {r, 30 + sh};
 }
 
 // x * (1/v) with the result in Q`frac`, given 1/v as a Reciprocal.

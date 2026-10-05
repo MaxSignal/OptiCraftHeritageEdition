@@ -73,8 +73,8 @@ void frameEnd(long long frameNs, long long, long long, int ticksThisFrame, int c
                       static_cast<unsigned long>(NglBackend::meshBytes() / 1024),
                       static_cast<unsigned long>(NglBackend::textureBytes() / 1024));
 
-    char phases[400];
-    nspireProfileTakeTopPhases(phases, sizeof(phases), 12);
+    char phases[640];
+    nspireProfileTakeTopPhases(phases, sizeof(phases), 20);
     if (phases[0] != '\0')
         NspireSystem::log("[phase] %s\n", phases);
 

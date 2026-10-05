@@ -9,6 +9,7 @@
 #include "BlockFence.h"
 #include "BlockFluid.h"
 #include "BlockGrass.h"
+#include "BlockLeaves.h"
 #include "BlockPistonBase.h"
 #include "BlockPistonExtension.h"
 #include "BlockRail.h"
@@ -400,6 +401,48 @@ bool RenderBlocks::renderSimpleOpaqueCubeWii(Block *block, int_t i, int_t j, int
 // of a section build. Anything with a texture transform, connected or natural
 // textures, better grass, fancy grass, anaglyph or smooth lighting takes the
 // regular path.
+// Grass and leaves average the biome colours around them in soft-float
+// doubles (ColorizerGrass / ColorizerFoliage), on every build of every section
+// they are in. The result only depends on the column and the leaf type, so it
+// is kept in a small direct-mapped cache, dropped when the world changes.
+int_t RenderBlocks::nspireTerrainColour(Block *block, int_t i, int_t j, int_t k)
+{
+	const bool grass = block == static_cast<Block *>(Block::grass);
+	const bool leaves = block == static_cast<Block *>(Block::leaves);
+	const bool tallGrass = block == static_cast<Block *>(Block::tallGrass);
+	if (!grass && !leaves && !tallGrass)
+		return CustomColorizer::getColorMultiplier(block, blockAccess, i, j, k);
+	struct Entry
+	{
+		int_t x, z;
+		std::uint32_t kind; // 0 = empty
+		int_t colour;
+	};
+	static Entry s_cache[1024];
+	static const void *s_world = nullptr;
+	static long_t s_seed = 0;
+	Minecraft *mc = Minecraft::getMinecraft();
+	World *world = mc != nullptr ? mc->theWorld : nullptr;
+	const long_t seed = world != nullptr ? world->getSeed() : 0;
+	if (world != s_world || seed != s_seed)
+	{
+		for (Entry &e : s_cache)
+			e.kind = 0;
+		s_world = world;
+		s_seed = seed;
+	}
+	const std::uint32_t kind = grass ? 1u
+		: (leaves ? 2u : 6u) + static_cast<std::uint32_t>(blockAccess->getBlockMetadata(i, j, k) & 3);
+	Entry &e = s_cache[((static_cast<std::uint32_t>(i) & 15u) | (static_cast<std::uint32_t>(k) & 15u) << 4 | (kind & 3u) << 8)];
+	if (e.kind == kind && e.x == i && e.z == k)
+		return e.colour;
+	e.x = i;
+	e.z = k;
+	e.kind = kind;
+	e.colour = CustomColorizer::getColorMultiplier(block, blockAccess, i, j, k);
+	return e.colour;
+}
+
 bool RenderBlocks::renderSimpleOpaqueCubeNspire(Block *block, int_t i, int_t j, int_t k, unsigned char faceMask,
 	int_t lx, int_t ly, int_t lz)
 {
@@ -419,7 +462,7 @@ bool RenderBlocks::renderSimpleOpaqueCubeNspire(Block *block, int_t i, int_t j, 
 
 	enableAO = false;
 	Tessellator *tessellator = &Tessellator::instance;
-	const int_t colour = CustomColorizer::getColorMultiplier(block, blockAccess, i, j, k);
+	const int_t colour = nspireTerrainColour(block, i, j, k);
 	const int_t red = (colour >> 16) & 0xff, green = (colour >> 8) & 0xff, blue = colour & 0xff;
 	const bool grass = block == static_cast<Block *>(Block::grass);
 	const unsigned char mask = renderAllFaces ? 0x3f : faceMask;
@@ -2184,7 +2227,12 @@ bool RenderBlocks::renderCrossedSquares(Block *block, int_t i, int_t j, int_t k)
 {
 	Tessellator *tessellator = &Tessellator::instance;
 	tessellator->setBrightness(block->getMixedBrightnessForBlock(blockAccess, i, j, k));
+#if defined(NSPIRE_PLATFORM)
+	const int_t l = nspireOneSidedPlants ? nspireTerrainColour(block, i, j, k)
+		: CustomColorizer::getColorMultiplier(block, blockAccess, i, j, k);
+#else
 	int_t l = CustomColorizer::getColorMultiplier(block, blockAccess, i, j, k);
+#endif
 	float f1 = (float)(l >> 16 & 0xff) / 255.0f;
 	float f2 = (float)(l >> 8 & 0xff) / 255.0f;
 	float f3 = (float)(l & 0xff) / 255.0f;
@@ -2213,8 +2261,15 @@ bool RenderBlocks::renderCrossedSquares(Block *block, int_t i, int_t j, int_t k)
 		d += ((tess_coord_t)((float)(l1 >> 16 & 15LL) / 15.0f) - 0.5f) * 0.5f;
 		d1 += ((tess_coord_t)((float)(l1 >> 20 & 15LL) / 15.0f) - 1.0f) * (tess_coord_t)0.20000000000000001;
 		d2 += ((tess_coord_t)((float)(l1 >> 24 & 15LL) / 15.0f) - 0.5f) * 0.5f;
+#if defined(NSPIRE_PLATFORM)
+		if (nspireOneSidedPlants)
+			nspirePlantPlanes = (l1 >> 28 & 1LL) != 0 ? 1 : 2;
+#endif
 	}
 	renderCrossedSquares(block, accessGetBlockMetadata(i, j, k), d, d1, d2);
+#if defined(NSPIRE_PLATFORM)
+	nspirePlantPlanes = 3;
+#endif
 	renderBetterSnow(i, j, k);
 	return true;
 }
@@ -2320,6 +2375,26 @@ void RenderBlocks::renderCrossedSquares(Block *block, int_t i, tess_coord_t d, t
 #else
 	const tess_coord_t reverseLowU = d4;
 	const tess_coord_t reverseHighU = d3;
+#endif
+#if defined(NSPIRE_PLATFORM)
+	if (nspireOneSidedPlants)
+	{
+		if (nspirePlantPlanes & 1)
+		{
+			tessellator->addVertexWithUV(d7, y + 1.0f, d9, d3, d5);
+			tessellator->addVertexWithUV(d7, y, d9, d3, d6);
+			tessellator->addVertexWithUV(d8, y, d10, d4, d6);
+			tessellator->addVertexWithUV(d8, y + 1.0f, d10, d4, d5);
+		}
+		if (nspirePlantPlanes & 2)
+		{
+			tessellator->addVertexWithUV(d7, y + 1.0f, d10, d3, d5);
+			tessellator->addVertexWithUV(d7, y, d10, d3, d6);
+			tessellator->addVertexWithUV(d8, y, d9, d4, d6);
+			tessellator->addVertexWithUV(d8, y + 1.0f, d9, d4, d5);
+		}
+		return;
+	}
 #endif
 	tessellator->addVertexWithUV(d7, y + 1.0f, d9, d3, d5);
 	tessellator->addVertexWithUV(d7, y, d9, d3, d6);

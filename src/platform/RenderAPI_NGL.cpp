@@ -80,6 +80,10 @@ struct NglTexture
     std::vector<COLOR> pixels;
     std::vector<std::uint8_t> rgba; // kept only for tiny textures (the lightmap)
     bool transparent = false;
+    // Atlases (square, 16 x 16 tiles): 1 for a tile with transparent texels.
+    // Terrain faces of the other tiles rasterise without the per-texel key test.
+    std::vector<std::uint8_t> tileClear;
+    int tileShift = 0; // log2 of the tile size in texels
     TEXTURE desc{};
 };
 
@@ -167,6 +171,33 @@ constexpr bool g_lowResWorld = true;
 bool g_inWorldPass = false;
 std::vector<COLOR> g_lowResBuffer;
 COLOR* g_target = nullptr; // the buffer nGL draws into
+// Set when the world pass closes: the GUI drawn on top needs a clear depth
+// buffer, but only if something depth-tested is drawn at all (a frame whose HUD
+// comes from the cache draws nothing after the world).
+bool g_guiDepthStale = false;
+
+// Drawing a terrain section (drawStoredMesh): every quad samples one atlas tile.
+bool g_terrainDraw = false;
+
+// HUD cache (NglBackend::hudBegin). The HUD is drawn into its own frame over a
+// key colour every few frames; the frames between copy the non-key pixels of
+// it onto the new world, row span by row span.
+enum class HudMode
+{
+    Off,     // not inside hudBegin/hudEnd
+    Live,    // drawing straight into the frame
+    Capture, // drawing into g_hudBuffer
+};
+constexpr COLOR kHudKey = 0xF81F; // magenta, which no HUD texture uses
+HudMode g_hudMode = HudMode::Off;
+std::vector<COLOR> g_hudBuffer;
+// Runs of HUD pixels in g_hudBuffer: start index | length << 17.
+std::vector<std::uint32_t> g_hudRuns;
+bool g_hudValid = false;
+bool g_hudLive = false;      // the last HUD blended: keep drawing it live until it stops
+bool g_hudSawBlend = false;  // a 50% blend was drawn since hudBegin
+std::uint32_t g_hudKey = 0;
+int g_hudAge = 0;
 
 int currentStackIndex()
 {
@@ -200,6 +231,14 @@ void allocateTexture(NglTexture& tex, int width, int height)
     tex.rows = nextPow2(std::max(height, 1));
     tex.pixels.assign(static_cast<std::size_t>(tex.stride) * tex.rows, 0);
     tex.transparent = false;
+    tex.tileShift = 0;
+    std::vector<std::uint8_t>().swap(tex.tileClear);
+    if (width == height && width >= 16 && (width & (width - 1)) == 0)
+    {
+        while ((16 << tex.tileShift) < width)
+            ++tex.tileShift;
+        tex.tileClear.assign(256, 1);
+    }
     if (width * height <= 32 * 32)
         tex.rgba.assign(static_cast<std::size_t>(width) * height * 4, 255);
     else
@@ -241,6 +280,28 @@ void writeTexels(NglTexture& tex, int x0, int y0, int w, int h, const std::uint8
                 std::memcpy(&tex.rgba[(static_cast<std::size_t>(ty) * tex.width + tx) * 4], p, 4);
         }
     }
+    if (tex.tileClear.empty() || w <= 0 || h <= 0)
+        return;
+    // Rescan the tiles the upload touched.
+    const int shift = tex.tileShift, size = 1 << shift;
+    const int tx0 = std::max(x0, 0) >> shift, ty0 = std::max(y0, 0) >> shift;
+    const int tx1 = std::min((x0 + w - 1) >> shift, 15), ty1 = std::min((y0 + h - 1) >> shift, 15);
+    for (int tv = ty0; tv <= ty1; ++tv)
+        for (int tu = tx0; tu <= tx1; ++tu)
+        {
+            bool clear = false;
+            for (int y = 0; y < size && !clear; ++y)
+            {
+                const COLOR* row = &tex.pixels[static_cast<std::size_t>((tv << shift) + y) * tex.stride + (tu << shift)];
+                for (int x = 0; x < size; ++x)
+                    if (row[x] == 0)
+                    {
+                        clear = true;
+                        break;
+                    }
+            }
+            tex.tileClear[static_cast<std::size_t>(tv) * 16 + tu] = clear ? 1 : 0;
+        }
 }
 
 // ---------------------------------------------------------------------------
@@ -784,6 +845,9 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
         blendHalf = a < 217 ||
                     g_state.blendSrc == RenderBlendFactor::DstColor ||
                     (g_state.blendSrc == RenderBlendFactor::One && g_state.blendDst == RenderBlendFactor::One);
+        // A blend into the HUD cache would mix with the key colour, not the world.
+        if (blendHalf && g_state.colorMask)
+            g_hudSawBlend = true;
     }
     if (g_state.alphaTest && a < 26)
         return;
@@ -807,7 +871,26 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
     {
         if (r < 250 || g < 250 || b < 250)
             modulate = color565(r, g, b);
-        const bool keyed = setup.texture->transparent && (g_state.alphaTest || g_state.blend);
+        bool keyed = setup.texture->transparent && (g_state.alphaTest || g_state.blend);
+        if (keyed && !setup.texture->tileClear.empty())
+        {
+            // A terrain face samples one atlas tile: without transparent texels
+            // there, the cheaper unkeyed span loop draws the same pixels.
+            int tu = -1, tv = -1;
+            if (v0.tileTag != 0)
+            {
+                tu = static_cast<int>((v0.tileTag >> 4) & 0xF);
+                tv = static_cast<int>(v0.tileTag & 0xF);
+            }
+            else if (g_terrainDraw)
+            {
+                const int shift = setup.texture->tileShift + 8;
+                tu = ((v0.u + v1.u + v2.u) / 3) >> shift;
+                tv = ((v0.v + v1.v + v2.v) / 3) >> shift;
+            }
+            if (tu >= 0 && tu < 16 && tv >= 0 && tv < 16 && !setup.texture->tileClear[static_cast<std::size_t>(tv) * 16 + tu])
+                keyed = false;
+        }
         vertexColor = keyed ? TEXTURE_TRANSPARENT : 0;
     }
     else
@@ -928,6 +1011,11 @@ bool prepareDraw(DrawSetup& setup)
         return false;
     if (!g_state.colorMask && !g_state.depthMask)
         return false;
+    if (g_guiDepthStale && !g_inWorldPass && (g_state.depthTest || g_state.depthMask))
+    {
+        g_guiDepthStale = false;
+        glClear(GL_DEPTH_BUFFER_BIT);
+    }
 
     MatrixCache& cache = g_matrixCache;
     const bool mvChanged = cache.mvSerial != g_matrixSerial[0];
@@ -1049,6 +1137,126 @@ void finishDraw()
     ngl_raster = NGLRasterState();
 }
 
+// Terrain sections (drawStoredMesh): quads of section-local Q12 positions with
+// Q16 texture coordinates, a colour and a lightmap brightness; no normals, no
+// texture matrix, no lighting. processVertex's 64-bit products become 32-bit
+// ones (the matrix in Q14, positions in Q8: a section spans 16 blocks), fog
+// reads the eye depth from w, and each quad is drawn as soon as its four
+// corners are done, so the vertex scratch never leaves the data cache.
+bool drawTerrainQuads(const DrawSetup& setup, const RenderInterleavedMesh& mesh, const std::uint8_t* base)
+{
+    if (mesh.primitive != RenderPrimitive::Quads || mesh.positionShort || !mesh.hasTexture || mesh.hasNormals ||
+        setup.texture == nullptr || setup.textureMatrix || setup.lighting)
+        return false;
+    const std::int32_t* m = setup.mvp.m;
+    std::int32_t q[12];
+    for (int i = 0; i < 12; ++i)
+    {
+        // |q| < 2^16 and |position| < 2^13 keep three products within 31 bits.
+        if (m[i] >= (4 << 16) || m[i] <= -(4 << 16))
+            return false;
+        q[i] = m[i] >> 2;
+    }
+    const std::int32_t tx = m[12], ty = m[13], tz = m[14], tw = m[15] >> 4;
+    // GL's fog distance is the eye-plane depth -z_eye, which a perspective
+    // projection leaves in w.
+    const FixedMatrix& proj = g_matrixCache.proj;
+    if (setup.fog && !(proj.m[3] == 0 && proj.m[7] == 0 && proj.m[11] == -NglFixed::kOne16 && proj.m[15] == 0))
+        return false;
+
+    const int tile = setup.texWidth >> 4;
+    const int texW = setup.texWidth, texH = setup.texHeight;
+    const std::uint8_t* lightmap = nullptr;
+    int lightmapWidth = 0;
+    if (setup.lightmap != nullptr && setup.lightmap->width >= 16 && setup.lightmap->height >= 16 && !setup.lightmap->rgba.empty())
+    {
+        lightmap = setup.lightmap->rgba.data();
+        lightmapWidth = setup.lightmap->width;
+    }
+
+    const auto vertex = [&](const std::uint8_t* p, ClipVertex& out) {
+        const std::int32_t* pos = reinterpret_cast<const std::int32_t*>(p);
+        const std::int32_t px = pos[0] >> 4, py = pos[1] >> 4, pz = pos[2] >> 4; // Q8
+        out.x = ((q[0] * px + q[4] * py + q[8] * pz) >> 10) + tx;
+        out.y = ((q[1] * px + q[5] * py + q[9] * pz) >> 10) + ty;
+        out.z = ((q[2] * px + q[6] * py + q[10] * pz) >> 10) + tz;
+        out.w = ((q[3] * px + q[7] * py + q[11] * pz) >> 10) + tw;
+        out.fog = setup.fog ? fogVisibility256(setup, out.w < 0 ? -out.w : out.w) : 256;
+
+        const std::int32_t* uv = reinterpret_cast<const std::int32_t*>(p + mesh.texCoordOffset);
+        const std::uint32_t tag = *reinterpret_cast<const std::uint32_t*>(p + mesh.normalOffset);
+        if (tag & kTileTag)
+        {
+            out.tileTag = tag;
+            out.u = (uv[0] * tile) >> 8;
+            out.v = (uv[1] * tile) >> 8;
+        }
+        else
+        {
+            out.tileTag = 0;
+            out.u = (uv[0] * texW) >> 8;
+            out.v = (uv[1] * texH) >> 8;
+        }
+
+        if (mesh.hasColor)
+        {
+            const std::uint8_t* c = p + mesh.colorOffset;
+            out.r = c[0];
+            out.g = c[1];
+            out.b = c[2];
+            out.a = c[3];
+        }
+        else
+        {
+            out.r = setup.color[0];
+            out.g = setup.color[1];
+            out.b = setup.color[2];
+            out.a = setup.color[3];
+        }
+        if (lightmap != nullptr)
+        {
+            int s = setup.lightmapS, t = setup.lightmapT;
+            if (mesh.hasBrightness)
+            {
+                const std::uint32_t b = *reinterpret_cast<const std::uint32_t*>(p + mesh.brightnessOffset);
+                s = static_cast<int>(b & 0xFFFFu);
+                t = static_cast<int>(b >> 16);
+            }
+            int block = s >> 4, sky = t >> 4;
+            block = block < 0 ? 0 : (block > 15 ? 15 : block);
+            sky = sky < 0 ? 0 : (sky > 15 ? 15 : sky);
+            const std::uint8_t* lm = lightmap + (sky * lightmapWidth + block) * 4;
+            out.r = (out.r * (lm[0] + 1)) >> 8;
+            out.g = (out.g * (lm[1] + 1)) >> 8;
+            out.b = (out.b * (lm[2] + 1)) >> 8;
+        }
+        out.outcode = computeOutcode(out.x, out.y, out.z, out.w);
+    };
+
+    const int stride = mesh.stride;
+    const int n = mesh.count & ~3;
+    ClipVertex v[4];
+    for (int i = 0; i < n; i += 4)
+    {
+        const std::uint8_t* p = base + static_cast<std::size_t>(i) * stride;
+        vertex(p, v[0]);
+        vertex(p + stride, v[1]);
+        vertex(p + 2 * stride, v[2]);
+        vertex(p + 3 * stride, v[3]);
+        if ((v[0].outcode & v[1].outcode & v[2].outcode & v[3].outcode) != 0)
+        {
+            g_stats.trianglesSubmitted += 2; // both outside one plane: no projection
+            continue;
+        }
+        for (ClipVertex& c : v)
+            if (c.outcode == 0)
+                c.screen = project(setup, c);
+        drawTriangle(setup, v[0], v[1], v[2]);
+        drawTriangle(setup, v[0], v[2], v[3]);
+    }
+    return true;
+}
+
 bool drawMeshNow(const RenderInterleavedMesh& mesh, bool fixedData = false)
 {
     if (mesh.data == nullptr || mesh.stride <= 0 || mesh.count <= 0)
@@ -1072,6 +1280,15 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh, bool fixedData = false)
 
     const std::uint8_t* base = static_cast<const std::uint8_t*>(mesh.data) +
                                static_cast<std::size_t>(mesh.first) * mesh.stride;
+    if (g_terrainDraw && fixedData && drawTerrainQuads(setup, mesh, base))
+    {
+#ifdef _TINSPIRE
+        platformProfileTickPhase("prep", static_cast<long long>(tVertices - tPrep) * 1000LL);
+        platformProfileTickPhase("terrain", static_cast<long long>(NspireSystem::micros() - tVertices) * 1000LL);
+#endif
+        finishDraw();
+        return true;
+    }
     g_vertexScratch.resize(static_cast<std::size_t>(mesh.count));
     for (int i = 0; i < mesh.count; ++i)
         processVertex(setup, mesh, base + static_cast<std::size_t>(i) * mesh.stride, fixedData, g_vertexScratch[i]);
@@ -1262,6 +1479,11 @@ bool drawStoredMesh(const StoredMesh& stored)
         return drawMeshNow(view, true);
     }
 
+    struct TerrainScope
+    {
+        TerrainScope() { g_terrainDraw = true; }
+        ~TerrainScope() { g_terrainDraw = false; }
+    } terrainScope;
     int quad = 0;
     int runStart = -1;
     bool drew = false;
@@ -1274,18 +1496,15 @@ bool drawStoredMesh(const StoredMesh& stored)
         }
         runStart = -1;
     };
-    for (int g = 0; g < RenderTerrainFaceGroups::kGroupCount; ++g)
+    constexpr int kOtherGroup = RenderTerrainFaceGroups::kGroupCount - 1;
+    for (int g = 0; g < kOtherGroup; ++g)
     {
         const int count = stored.groupQuads[g];
         if (count <= 0)
             continue;
-        bool visible = true;
-        if (g < RenderTerrainFaceGroups::kGroupCount - 1)
-        {
-            const int axis = g >> 1;
-            visible = (g & 1) == 0 ? eye[axis] + kFaceCullMargin > stored.planeMin[g]
-                                   : eye[axis] - kFaceCullMargin < stored.planeMax[g];
-        }
+        const int axis = g >> 1;
+        const bool visible = (g & 1) == 0 ? eye[axis] + kFaceCullMargin > stored.planeMin[g]
+                                          : eye[axis] - kFaceCullMargin < stored.planeMax[g];
         if (visible)
         {
             if (runStart < 0)
@@ -1299,6 +1518,18 @@ bool drawStoredMesh(const StoredMesh& stored)
         quad += count;
     }
     flush(quad);
+    if (const int count = stored.groupQuads[kOtherGroup])
+    {
+        // Diagonal faces, i.e. mostly plants: the terrain build gives them one
+        // side only (RenderBlocks::nspireOneSidedPlants), so draw both.
+        const bool cull = g_state.cullFace;
+        g_state.cullFace = false;
+        view.first = quad * 4;
+        view.count = count * 4;
+        drew |= drawMeshNow(view, true);
+        g_state.cullFace = cull;
+        quad += count;
+    }
     return drew || quad == 0;
 }
 
@@ -1317,7 +1548,7 @@ constexpr int kMergeMax = 8;
 
 struct MergeFace
 {
-    float plane;
+    std::int32_t plane; // Q12
     std::uint32_t colour;
     std::uint32_t light;
     int tileU, tileV;
@@ -1342,69 +1573,84 @@ struct MergeFace
     }
 };
 
-inline float rawFloat(const std::int32_t* v, int i)
-{
-    float f;
-    std::memcpy(&f, v + i, sizeof(f));
-    return f;
-}
-
 inline void setRawFloat(std::int32_t* v, int i, float f)
 {
     std::memcpy(v + i, &f, sizeof(f));
 }
 
-inline bool nearInt(float v, float target)
+// The stored mesh is still float here; the classification reads it as fixed
+// point (NglFixed::fromFloat takes the bits apart), so none of it goes through
+// the soft-float library. Positions Q12, texture coordinates Q16.
+inline std::int32_t rawPos(const std::int32_t* v, int i)
 {
-    const float d = v - target;
-    return d > -0.01f && d < 0.01f;
+    float f;
+    std::memcpy(&f, v + i, sizeof(f));
+    return NglFixed::fromFloat(f, NglFixed::kPosShift);
+}
+
+inline std::int32_t rawTex(const std::int32_t* v, int i)
+{
+    float f;
+    std::memcpy(&f, v + i, sizeof(f));
+    return NglFixed::fromFloat(f, 16);
+}
+
+// Within 0.01 of an integer `target`, in Q`shift`.
+inline bool nearInt(std::int32_t v, int target, int shift)
+{
+    const std::int32_t d = v - (target << shift);
+    const std::int32_t tolerance = (1 << shift) / 100;
+    return d > -tolerance && d < tolerance;
 }
 
 // Classifies one quad of an axis group; false if it is not a plain unit block
 // face with one tile, colour and light (slabs, cross plants, liquids, ...).
 bool classifyFace(const std::int32_t* q, int axis, MergeFace& f)
 {
+    constexpr int kP = NglFixed::kPosShift;
     const int a = (axis + 1) % 3, b = (axis + 2) % 3;
-    f.plane = rawFloat(q, axis);
+    f.plane = rawPos(q, axis);
     f.colour = static_cast<std::uint32_t>(q[5]);
     f.light = static_cast<std::uint32_t>(q[7]);
-    float amin = 1e9f, bmin = 1e9f, umin = 1e9f, vmin = 1e9f;
+    std::int32_t pa[4], pb[4], tu[4], tv[4];
+    std::int32_t amin = 0x7FFFFFFF, bmin = 0x7FFFFFFF, umin = 0x7FFFFFFF, vmin = 0x7FFFFFFF;
     for (int k = 0; k < 4; ++k)
     {
         const std::int32_t* v = q + k * 8;
-        if (rawFloat(v, axis) != f.plane || static_cast<std::uint32_t>(v[5]) != f.colour ||
+        if (rawPos(v, axis) != f.plane || static_cast<std::uint32_t>(v[5]) != f.colour ||
             static_cast<std::uint32_t>(v[7]) != f.light || v[6] != 0)
             return false;
-        amin = std::min(amin, rawFloat(v, a));
-        bmin = std::min(bmin, rawFloat(v, b));
-        umin = std::min(umin, rawFloat(v, 3));
-        vmin = std::min(vmin, rawFloat(v, 4));
+        pa[k] = rawPos(v, a);
+        pb[k] = rawPos(v, b);
+        tu[k] = rawTex(v, 3) * 16; // tile units, Q16
+        tv[k] = rawTex(v, 4) * 16;
+        amin = std::min(amin, pa[k]);
+        bmin = std::min(bmin, pb[k]);
+        umin = std::min(umin, tu[k]);
+        vmin = std::min(vmin, tv[k]);
     }
-    f.a0 = static_cast<int>(std::floor(amin + 0.5f));
-    f.b0 = static_cast<int>(std::floor(bmin + 0.5f));
-    if (!nearInt(amin, static_cast<float>(f.a0)) || !nearInt(bmin, static_cast<float>(f.b0)) || f.a0 < 0 || f.a0 > 15 ||
-        f.b0 < 0 || f.b0 > 15)
+    f.a0 = (amin + (1 << (kP - 1))) >> kP;
+    f.b0 = (bmin + (1 << (kP - 1))) >> kP;
+    if (!nearInt(amin, f.a0, kP) || !nearInt(bmin, f.b0, kP) || f.a0 < 0 || f.a0 > 15 || f.b0 < 0 || f.b0 > 15)
         return false;
-    f.tileU = static_cast<int>(std::floor(umin * 16.0f + 0.5f));
-    f.tileV = static_cast<int>(std::floor(vmin * 16.0f + 0.5f));
+    f.tileU = (umin + (1 << 15)) >> 16;
+    f.tileV = (vmin + (1 << 15)) >> 16;
     if (f.tileU < 0 || f.tileU > 15 || f.tileV < 0 || f.tileV > 15)
         return false;
     f.pattern = 0;
     unsigned seen = 0;
     for (int k = 0; k < 4; ++k)
     {
-        const std::int32_t* v = q + k * 8;
-        const float ca = rawFloat(v, a) - static_cast<float>(f.a0);
-        const float cb = rawFloat(v, b) - static_cast<float>(f.b0);
-        const float cu = rawFloat(v, 3) * 16.0f - static_cast<float>(f.tileU);
-        const float cv = rawFloat(v, 4) * 16.0f - static_cast<float>(f.tileV);
+        const std::int32_t c[4] = {pa[k] - (f.a0 << kP), pb[k] - (f.b0 << kP), tu[k] - (f.tileU << 16),
+                                   tv[k] - (f.tileV << 16)};
+        const int shifts[4] = {kP, kP, 16, 16};
         int bits = 0;
-        for (const float c : {ca, cb, cu, cv})
+        for (int i = 0; i < 4; ++i)
         {
             bits <<= 1;
-            if (nearInt(c, 1.0f))
+            if (nearInt(c[i], 1, shifts[i]))
                 bits |= 1;
-            else if (!nearInt(c, 0.0f))
+            else if (!nearInt(c[i], 0, shifts[i]))
                 return false;
         }
         seen |= 1u << (bits >> 2); // corner (a, b)
@@ -1495,18 +1741,20 @@ int mergeGroup(const std::int32_t* src, int quads, int axis, std::vector<std::in
                 }
                 const std::uint32_t tag = kTileTag | (static_cast<std::uint32_t>(surface.tileU) << 4) |
                                           static_cast<std::uint32_t>(surface.tileV);
-                const float extentU = static_cast<float>(uAlongA ? w : h);
-                const float extentV = static_cast<float>(vAlongA ? w : h);
+                // Small integers as floats from a table: no int-to-float calls.
+                static const float kInt[17] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+                const int extentU = uAlongA ? w : h;
+                const int extentV = vAlongA ? w : h;
                 for (int k = 0; k < 4; ++k)
                 {
                     std::int32_t v[8];
                     std::copy(q + k * 8, q + k * 8 + 8, v);
                     const int bits = (surface.pattern >> ((3 - k) * 4)) & 0xF;
                     const int ca = (bits >> 3) & 1, cb = (bits >> 2) & 1, cu = (bits >> 1) & 1, cv = bits & 1;
-                    setRawFloat(v, a, static_cast<float>(aa + ca * w));
-                    setRawFloat(v, b, static_cast<float>(bb + cb * h));
-                    setRawFloat(v, 3, static_cast<float>(cu) * extentU); // tile units
-                    setRawFloat(v, 4, static_cast<float>(cv) * extentV);
+                    setRawFloat(v, a, kInt[aa + ca * w]);
+                    setRawFloat(v, b, kInt[bb + cb * h]);
+                    setRawFloat(v, 3, kInt[cu * extentU]); // tile units
+                    setRawFloat(v, 4, kInt[cv * extentV]);
                     v[6] = static_cast<std::int32_t>(tag);
                     out.insert(out.end(), v, v + 8);
                 }
@@ -1561,6 +1809,15 @@ constexpr int kExpSteps = 1024;             // over [0, 16), 1/64 per step
 std::uint16_t g_expTable[kExpSteps + 1] = {};
 }
 
+std::uint32_t g_recipTable[256];
+
+void initRecipTable()
+{
+    // Entry i covers vn in [(256 + i) * 64, (257 + i) * 64): its midpoint.
+    for (int i = 0; i < 256; ++i)
+        g_recipTable[i] = static_cast<std::uint32_t>(((1ull << 31) / static_cast<unsigned long long>((256 + i) * 64 + 32) + 1) >> 1);
+}
+
 void initExpTable()
 {
     for (int i = 0; i <= kExpSteps; ++i)
@@ -1594,6 +1851,7 @@ void initialize()
     nglSetBuffer(NspireSystem::backBuffer());
     g_target = NspireSystem::backBuffer();
     NglFixed::initExpTable();
+    NglFixed::initRecipTable();
     for (auto& stack : g_state.stacks)
         stack.assign(1, identityMatrix());
     ngl_raster = NGLRasterState();
@@ -1640,8 +1898,94 @@ void endWorldPass()
     nglSetBuffer(dst);
     ngl_clip_w = kW;
     ngl_clip_h = NspireSystem::kScreenHeight;
-    // The GUI drawn next depth-tests against full-resolution coordinates.
-    glClear(GL_DEPTH_BUFFER_BIT);
+    // The GUI drawn next depth-tests against full-resolution coordinates;
+    // cleared by its first depth-tested draw (prepareDraw).
+    g_guiDepthStale = true;
+}
+
+bool hudBegin(std::uint32_t stateKey, bool cacheable)
+{
+    if (!g_initialized || g_hudMode != HudMode::Off)
+        return true;
+    g_hudSawBlend = false;
+    if (!cacheable || g_hudLive)
+    {
+        if (!cacheable)
+            g_hudValid = false;
+        g_hudMode = HudMode::Live;
+        return true;
+    }
+    constexpr int kMaxAge = 6; // frames: hearts, tooltips and the like animate
+    if (g_hudValid && stateKey == g_hudKey && ++g_hudAge < kMaxAge)
+        return false; // hudEnd composites the cached HUD
+    constexpr std::size_t kPixels = static_cast<std::size_t>(NspireSystem::kScreenWidth) * NspireSystem::kScreenHeight;
+    if (g_hudBuffer.size() != kPixels)
+        g_hudBuffer.assign(kPixels, kHudKey);
+    else
+        std::fill(g_hudBuffer.begin(), g_hudBuffer.end(), kHudKey);
+    g_hudMode = HudMode::Capture;
+    g_hudKey = stateKey;
+    g_hudAge = 0;
+    g_target = g_hudBuffer.data();
+    nglSetBuffer(g_target);
+    return true;
+}
+
+bool hudEnd()
+{
+    const HudMode mode = g_hudMode;
+    g_hudMode = HudMode::Off;
+    if (mode == HudMode::Live)
+    {
+        // Try the cache again once a frame's HUD drew without blending.
+        g_hudLive = g_hudSawBlend;
+        return false;
+    }
+    if (mode == HudMode::Capture)
+    {
+        g_target = NspireSystem::backBuffer();
+        nglSetBuffer(g_target);
+        if (g_hudSawBlend)
+        {
+            // Chat, fading text: the blend needs the world under it. Draw this
+            // frame's HUD again, straight into the frame.
+            g_hudValid = false;
+            g_hudLive = true;
+            g_hudMode = HudMode::Live;
+            g_hudSawBlend = false;
+            return true;
+        }
+        constexpr int kW = NspireSystem::kScreenWidth;
+        g_hudRuns.clear();
+        for (int y = 0; y < NspireSystem::kScreenHeight; ++y)
+        {
+            const COLOR* row = g_hudBuffer.data() + y * kW;
+            for (int x = 0; x < kW;)
+            {
+                if (row[x] == kHudKey)
+                {
+                    ++x;
+                    continue;
+                }
+                const int start = x;
+                while (x < kW && row[x] != kHudKey)
+                    ++x;
+                g_hudRuns.push_back(static_cast<std::uint32_t>(y * kW + start) |
+                                    static_cast<std::uint32_t>(x - start) << 17);
+            }
+        }
+        g_hudValid = true;
+    }
+    if (!g_hudValid)
+        return false;
+    COLOR* dst = NspireSystem::backBuffer();
+    const COLOR* src = g_hudBuffer.data();
+    for (const std::uint32_t run : g_hudRuns)
+    {
+        const std::uint32_t start = run & 0x1FFFFu;
+        std::memcpy(dst + start, src + start, (run >> 17) * sizeof(COLOR));
+    }
+    return false;
 }
 
 void shutdown()

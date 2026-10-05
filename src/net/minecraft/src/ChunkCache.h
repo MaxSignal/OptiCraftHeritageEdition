@@ -31,6 +31,12 @@ public:
 	// thousands of IDs from an 18^3 neighbourhood.
 	void useDenseBlockIds(std::vector<std::uint8_t> &buffer, int_t x0, int_t y0, int_t z0,
 		int_t x1, int_t y1, int_t z1, bool fill);
+	// The dense copy when it is a section's full 18^3 neighbourhood, indexed
+	// ((x - x0) * 18 + (z - z0)) * 18 + (y - y0); null otherwise.
+	const std::uint8_t *denseSectionIds() const
+	{
+		return denseW == 18 && denseH == 18 && denseD == 18 ? denseIds : nullptr;
+	}
 #endif
 	bool hasResidentChunkAtBlock(int_t i, int_t k) const;
 #if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM)

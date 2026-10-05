@@ -55,9 +55,12 @@ void nspireProfileTakeTopPhases(char* out, std::size_t size, int top)
 std::uint32_t platformProfileRenderPhaseBegin() { return static_cast<std::uint32_t>(NspireSystem::micros()); }
 void platformProfileRenderPhaseEnd(std::uint32_t start, PlatformRenderPhase phase)
 {
-    static const char* const kNames[] = {"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11"};
+    // PlatformRenderPhase order.
+    static const char* const kNames[] = {"sky", "frustum", "build", "opaque", "entities", "translucent", "hand",
+                                         "hud", "entDraw", "teDraw", "hudItems", "hudText", "hudHints"};
+    constexpr int kCount = static_cast<int>(sizeof(kNames) / sizeof(kNames[0]));
     const int index = static_cast<int>(phase);
-    const char* name = (index >= 0 && index < 12) ? kNames[index] : "rX";
+    const char* name = (index >= 0 && index < kCount) ? kNames[index] : "rX";
     add(name, static_cast<long long>(static_cast<std::uint32_t>(NspireSystem::micros()) - start) * 1000LL);
 }
 void platformProfileTickPhase(const char* name, long long ns) { add(name, ns); }

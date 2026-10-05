@@ -139,15 +139,16 @@ int_t SpawnerAnimals::performSpawning(World *world, bool spawnHostiles, bool spa
         return 0;
 
 #if PLATFORM_MOB_SPAWN_INTERVAL_TICKS > 1 || PLATFORM_MAX_LIVE_MOBS < 0x7fffffff
-    int_t liveMobs = world->countEntities(EnumCreatureTypeTag::monster_tag)
-                   + world->countEntities(EnumCreatureTypeTag::creature_tag)
-                   + world->countEntities(EnumCreatureTypeTag::waterCreature_tag);
-
+    // The interval first: counting walks every loaded entity three times, which
+    // the ticks between spawn passes have no use for.
     static int_t s_spawnPhase = 0;
     if (++s_spawnPhase < PLATFORM_MOB_SPAWN_INTERVAL_TICKS)
         return 0;
     s_spawnPhase = 0;
 
+    int_t liveMobs = world->countEntities(EnumCreatureTypeTag::monster_tag)
+                   + world->countEntities(EnumCreatureTypeTag::creature_tag)
+                   + world->countEntities(EnumCreatureTypeTag::waterCreature_tag);
     if (liveMobs >= PLATFORM_MAX_LIVE_MOBS)
         return 0;
 #endif

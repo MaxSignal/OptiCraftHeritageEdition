@@ -10,6 +10,7 @@
 // captured RAM meshes behind the chunk-handle API the Wii path uses.
 
 #include <cstddef>
+#include <cstdint>
 
 #include "platform/RenderAPI.h"
 
@@ -39,6 +40,19 @@ std::size_t textureBytes();
 // that up into the frame and clears depth for the GUI drawn on top.
 void beginWorldPass();
 void endWorldPass();
+
+// The in-game HUD, cached: drawing it costs as much as half the terrain, and it
+// rarely changes between frames.
+//   if (hudBegin(key, cacheable)) { draw; if (hudEnd()) { draw; hudEnd(); } }
+//   else hudEnd();
+// hudBegin returns false when the HUD cached under the same `stateKey` is
+// recent enough: hudEnd then copies it onto the frame. Otherwise the HUD is
+// drawn into the cache (or, when not `cacheable` or while it uses blending,
+// straight into the frame). hudEnd returns true when the HUD drawn into the
+// cache turned out to blend with what is under it: the caller draws it once
+// more, live.
+bool hudBegin(std::uint32_t stateKey, bool cacheable);
+bool hudEnd();
 
 // Draw counters since the last call (ClientProfilerBackend_NSPIRE logs them).
 struct Stats

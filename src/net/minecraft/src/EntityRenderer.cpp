@@ -57,6 +57,7 @@
 #include "pc/lwjgl/Keyboard.h"
 #include "pc/lwjgl/Mouse.h"
 #include "InventoryPlayer.h"
+#include "ItemStack.h"
 #include "WorldChunkManager.h"
 #include "BiomeGenBase.h"
 #include "EntitySmokeFX.h"
@@ -104,6 +105,42 @@ namespace
         if (daylight >= 1.0f)
             return 15;
         return static_cast<int>(daylight * 15.0f + 0.5f);
+    }
+}
+#endif
+
+#if PLATFORM_NSPIRE
+namespace
+{
+    // What the in-game HUD shows that should redraw it at once rather than when
+    // its cache ages out (NglBackend::hudBegin): the hotbar, the bars, the
+    // block under the crosshair (the control hints follow it).
+    std::uint32_t nspireHudStateKey(Minecraft *mc)
+    {
+        std::uint32_t h = 2166136261u;
+        const auto mix = [&h](std::uint32_t v) { h = (h ^ v) * 16777619u; };
+        EntityPlayerSP *player = mc->thePlayer;
+        InventoryPlayer *inv = player->inventory;
+        mix(static_cast<std::uint32_t>(inv->currentItem));
+        for (int i = 0; i < 9; ++i)
+        {
+            ItemStack *stack = inv->mainInventory[i];
+            mix(stack == nullptr ? 0u : static_cast<std::uint32_t>(stack->itemID) |
+                                            static_cast<std::uint32_t>(stack->stackSize) << 16);
+            mix(stack == nullptr ? 0u : static_cast<std::uint32_t>(stack->getItemDamage()));
+        }
+        mix(static_cast<std::uint32_t>(player->getHealth()));
+        mix(static_cast<std::uint32_t>(player->getFoodStats()->getFoodLevel()));
+        mix(static_cast<std::uint32_t>(player->getAir()));
+        mix(static_cast<std::uint32_t>(inv->getTotalArmorValue()));
+        mix(static_cast<std::uint32_t>(player->experienceLevel));
+        mix(static_cast<std::uint32_t>(player->experience * 182.0f));
+        const MovingObjectPosition *hit = mc->objectMouseOver;
+        mix(hit == nullptr ? 0u : 1u + static_cast<std::uint32_t>(hit->typeOfHit));
+        mix(static_cast<std::uint32_t>(mc->gameSettings->showDebugInfo) |
+            static_cast<std::uint32_t>(mc->gameSettings->showFps) << 1 |
+            static_cast<std::uint32_t>(mc->gameSettings->thirdPersonView) << 2);
+        return h;
     }
 }
 #endif
@@ -436,10 +473,33 @@ void EntityRenderer::updateLightmap()
         return;
 
     const float daylight = world->func_35464_b(1.0f);
+#if PLATFORM_NSPIRE
+    // 256 texels of soft-float math, and the torch flicker asked for them every
+    // tick. Without the flicker the map only follows the time of day (in 1/128
+    // steps), lightning, the brightness setting and the dimension.
+    const float torchFlicker = 0.0f;
+    {
+        const std::uint32_t key = static_cast<std::uint32_t>(daylight * 128.0f) |
+                                  (world->field_27172_i > 0 ? 1u << 8 : 0u) |
+                                  static_cast<std::uint32_t>(mc->gameSettings->ofBrightness * 64.0f) << 9 |
+                                  static_cast<std::uint32_t>(world->worldProvider->worldType & 0xff) << 17 |
+                                  static_cast<std::uint32_t>(lightmapTexture & 0x7f) << 25;
+        if (nspireLightmapValid && key == nspireLightmapKey && world->worldProvider == nspireLightmapProvider)
+        {
+            lightmapUpdateNeeded = false;
+            return;
+        }
+        nspireLightmapKey = key;
+        nspireLightmapProvider = world->worldProvider;
+        nspireLightmapValid = true;
+    }
+#else
+    const float torchFlicker = torchFlickerX;
+#endif
     for (int_t i = 0; i < 256; ++i)
     {
         float sky = world->worldProvider->lightBrightnessTable[i / 16] * (daylight * 0.95f + 0.05f);
-        float block = world->worldProvider->lightBrightnessTable[i % 16] * (torchFlickerX * 0.1f + 1.5f);
+        float block = world->worldProvider->lightBrightnessTable[i % 16] * (torchFlicker * 0.1f + 1.5f);
         if (world->field_27172_i > 0)
             sky = world->worldProvider->lightBrightnessTable[i / 16];
 
@@ -1426,8 +1486,26 @@ void EntityRenderer::updateCameraAndRender(float partialTicks)
 #if PLATFORM_PS2 && MC_LOG_LEVEL > 2
                 const PlatformDrawSnapshot hudDrawStart = platformProfileDrawSnapshot();
 #endif
+#if PLATFORM_NSPIRE
+                // Cached between frames; a screen on top (inventory, pause)
+                // draws the HUD live under it.
+                if (NglBackend::hudBegin(nspireHudStateKey(mc), mc->currentScreen == nullptr))
+                {
+                    mc->ingameGUI->renderGameOverlay(partialTicks, mc->currentScreen != nullptr,
+                                                     scaledMouseX, scaledMouseY);
+                    if (NglBackend::hudEnd())
+                    {
+                        mc->ingameGUI->renderGameOverlay(partialTicks, mc->currentScreen != nullptr,
+                                                         scaledMouseX, scaledMouseY);
+                        NglBackend::hudEnd();
+                    }
+                }
+                else
+                    NglBackend::hudEnd();
+#else
                 mc->ingameGUI->renderGameOverlay(partialTicks, mc->currentScreen != nullptr,
                                                  scaledMouseX, scaledMouseY);
+#endif
 #if PLATFORM_PROFILE_RENDER_PHASES
                 platformProfileRenderPhaseEnd(cycHud, PlatformRenderPhase::Hud);
 #endif
