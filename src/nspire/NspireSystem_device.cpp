@@ -47,7 +47,30 @@ bool g_timerRunning = false;
 bool g_exit = false;
 std::string g_appDir = "/documents/ndless";
 std::uint16_t* g_backBuffer = nullptr;
+void* g_backBufferBlock = nullptr; // allocation g_backBuffer is aligned within
 bool g_logStarted = false;
+
+// The CX II (and CX HW-W) panel scans 240x320 portrait. Ndless's lcd_blit
+// rotates the landscape frame into it pixel by pixel down output columns,
+// 320 strided 16-bit stores per column: ~18 ms a frame. This writes the
+// portrait rows in order, two pixels per store, reading 16 source columns at
+// a time -- one cache line per source row, so the 240 lines a tile needs stay
+// in the 16 KB data cache. Same mapping: out[x * 240 + y] = in[y * 320 + x].
+void blitPortrait(const std::uint16_t* in, std::uint16_t* out)
+{
+    constexpr int kW = 320, kH = 240, kTile = 16;
+    for (int xb = 0; xb < kW; xb += kTile)
+        for (int x = xb; x < xb + kTile; ++x)
+        {
+            std::uint32_t* o = reinterpret_cast<std::uint32_t*>(out + x * kH);
+            const std::uint16_t* c = in + x;
+            for (int y = 0; y < kH; y += 4, c += 4 * kW, o += 2)
+            {
+                o[0] = c[0] | static_cast<std::uint32_t>(c[kW]) << 16;
+                o[1] = c[2 * kW] | static_cast<std::uint32_t>(c[3 * kW]) << 16;
+            }
+        }
+}
 
 const t_key* keyTable()
 {
@@ -142,9 +165,11 @@ void initialize(int argc, char** argv)
         if (slash != std::string::npos)
             g_appDir = path.substr(0, slash);
     }
-    g_backBuffer = static_cast<std::uint16_t*>(std::calloc(kScreenWidth * kScreenHeight, sizeof(std::uint16_t)));
-    if (g_backBuffer == nullptr)
+    // 32-byte aligned (a cache line), which blitPortrait's tiling relies on.
+    g_backBufferBlock = std::calloc(kScreenWidth * kScreenHeight * sizeof(std::uint16_t) + 32, 1);
+    if (g_backBufferBlock == nullptr)
         fatal("Out of memory allocating the framebuffer.");
+    g_backBuffer = reinterpret_cast<std::uint16_t*>((reinterpret_cast<std::uintptr_t>(g_backBufferBlock) + 31) & ~std::uintptr_t(31));
 
     // Where the loader put the program and what the OS heap returns, modulo 8:
     // anything but 0 means 64-bit statics or unwrapped heap blocks would be
@@ -160,7 +185,8 @@ void initialize(int argc, char** argv)
 
 void shutdown()
 {
-    std::free(g_backBuffer);
+    std::free(g_backBufferBlock);
+    g_backBufferBlock = nullptr;
     g_backBuffer = nullptr;
     stopTimer();
 }
@@ -189,7 +215,12 @@ std::uint16_t* backBuffer() { return g_backBuffer; }
 
 void present()
 {
-    lcd_blit(g_backBuffer, SCR_320x240_565);
+    static const bool portrait = lcd_type() == SCR_240x320_565;
+    std::uint16_t* screen = static_cast<std::uint16_t*>(REAL_SCREEN_BASE_ADDRESS);
+    if (portrait && screen != nullptr && (reinterpret_cast<std::uintptr_t>(screen) & 3u) == 0)
+        blitPortrait(g_backBuffer, screen);
+    else
+        lcd_blit(g_backBuffer, SCR_320x240_565);
 }
 
 void scanKeys() {}

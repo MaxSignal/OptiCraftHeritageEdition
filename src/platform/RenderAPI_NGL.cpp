@@ -83,6 +83,7 @@ struct NglTexture
     // Atlases (square, 16 x 16 tiles): 1 for a tile with transparent texels.
     // Terrain faces of the other tiles rasterise without the per-texel key test.
     std::vector<std::uint8_t> tileClear;
+    std::vector<std::uint32_t> tileAverage; // 0xRRGGBB of each tile's opaque texels
     int tileShift = 0; // log2 of the tile size in texels
     TEXTURE desc{};
 };
@@ -178,6 +179,8 @@ bool g_guiDepthStale = false;
 
 // Drawing a terrain section (drawStoredMesh): every quad samples one atlas tile.
 bool g_terrainDraw = false;
+// Eye depth (clip w, Q12) beyond which terrain faces are drawn flat (drawTriangle).
+constexpr std::int32_t kFlatTerrainW = 10 << 12;
 
 // HUD cache (NglBackend::hudBegin). The HUD is drawn into its own frame over a
 // key colour every few frames; the frames between copy the non-key pixels of
@@ -238,6 +241,7 @@ void allocateTexture(NglTexture& tex, int width, int height)
         while ((16 << tex.tileShift) < width)
             ++tex.tileShift;
         tex.tileClear.assign(256, 1);
+        tex.tileAverage.assign(256, 0x808080u);
     }
     if (width * height <= 32 * 32)
         tex.rgba.assign(static_cast<std::size_t>(width) * height * 4, 255);
@@ -290,17 +294,28 @@ void writeTexels(NglTexture& tex, int x0, int y0, int w, int h, const std::uint8
         for (int tu = tx0; tu <= tx1; ++tu)
         {
             bool clear = false;
-            for (int y = 0; y < size && !clear; ++y)
+            std::uint32_t sum[3] = {0, 0, 0}, opaque = 0;
+            for (int y = 0; y < size; ++y)
             {
                 const COLOR* row = &tex.pixels[static_cast<std::size_t>((tv << shift) + y) * tex.stride + (tu << shift)];
                 for (int x = 0; x < size; ++x)
-                    if (row[x] == 0)
+                {
+                    const COLOR c = row[x];
+                    if (c == 0)
                     {
                         clear = true;
-                        break;
+                        continue;
                     }
+                    sum[0] += ((c >> 11) & 31) << 3;
+                    sum[1] += ((c >> 5) & 63) << 2;
+                    sum[2] += (c & 31) << 3;
+                    ++opaque;
+                }
             }
-            tex.tileClear[static_cast<std::size_t>(tv) * 16 + tu] = clear ? 1 : 0;
+            const std::size_t index = static_cast<std::size_t>(tv) * 16 + tu;
+            tex.tileClear[index] = clear ? 1 : 0;
+            if (opaque > 0)
+                tex.tileAverage[index] = (sum[0] / opaque) << 16 | (sum[1] / opaque) << 8 | (sum[2] / opaque);
         }
 }
 
@@ -817,7 +832,106 @@ bool culled(long long area)
 // Host-only triangle accounting (NSPIRE_SIM_TRISTATS): why submitted triangles die.
 unsigned long g_triOutside = 0, g_triClipEmpty = 0, g_triCulled = 0, g_triDrawn = 0, g_triClipped = 0, g_triFaded = 0;
 #endif
-void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex& v1, const ClipVertex& v2)
+// What a triangle is drawn with: flat colour, raster state and whether it is
+// drawn at all. Terrain quads compute this once for both of their triangles.
+struct TriangleShade
+{
+    bool visible = false;
+    bool blendHalf = false;
+    bool flat = false;     // untextured, in the tile's average colour
+    bool textured = false;
+    COLOR fogAdd = 0;
+    COLOR modulate = 0xFFFF;
+    COLOR vertexColor = 0;
+};
+
+// `farW` is the smallest eye depth of the primitive's corners (flat shading
+// of far terrain faces); r, g, b, a and fog are its average lit colour and fog.
+TriangleShade shadeTriangle(const DrawSetup& setup, int r, int g, int b, int a, int fogVis, std::int32_t farW,
+                            const ClipVertex& v0, const ClipVertex& v1, const ClipVertex& v2)
+{
+    TriangleShade s;
+    if (g_state.blend)
+    {
+        // A 50% blend is the only blend there is, so faint overlays (vignettes,
+        // gradient washes) would come out far too strong -- and cost a
+        // full-screen read-modify-write. Below ~30% they are left out.
+        if (a < 77)
+            return s;
+        s.blendHalf = a < 217 ||
+                      g_state.blendSrc == RenderBlendFactor::DstColor ||
+                      (g_state.blendSrc == RenderBlendFactor::One && g_state.blendDst == RenderBlendFactor::One);
+        // A blend into the HUD cache would mix with the key colour, not the world.
+        if (s.blendHalf && g_state.colorMask)
+            g_hudSawBlend = true;
+    }
+    if (g_state.alphaTest && a < 26)
+        return s;
+
+    // The atlas tile a terrain face samples (-1: unknown).
+    int tile = -1;
+    if (setup.texture != nullptr && !setup.texture->tileClear.empty())
+    {
+        int tu = -1, tv = -1;
+        if (v0.tileTag != 0)
+        {
+            tu = static_cast<int>((v0.tileTag >> 4) & 0xF);
+            tv = static_cast<int>(v0.tileTag & 0xF);
+        }
+        else if (g_terrainDraw)
+        {
+            const int shift = setup.texture->tileShift + 8;
+            tu = ((v0.u + v1.u + v2.u) / 3) >> shift;
+            tv = ((v0.v + v1.v + v2.v) / 3) >> shift;
+        }
+        if (tu >= 0 && tu < 16 && tv >= 0 && tv < 16)
+            tile = tv * 16 + tu;
+    }
+
+    // Far terrain faces in one flat colour: the tile's average texel, lit. At
+    // 160x120 a block ten blocks away is a few pixels across, too small for
+    // its texture to show, and a flat span skips the texel fetch and the
+    // per-pixel colour multiply.
+    if (g_terrainDraw && tile >= 0 && farW > kFlatTerrainW && !setup.texture->tileClear[static_cast<std::size_t>(tile)])
+    {
+        const std::uint32_t avg = setup.texture->tileAverage[static_cast<std::size_t>(tile)];
+        r = (r * static_cast<int>((avg >> 16) & 0xFF)) >> 8;
+        g = (g * static_cast<int>((avg >> 8) & 0xFF)) >> 8;
+        b = (b * static_cast<int>(avg & 0xFF)) >> 8;
+        s.flat = true;
+    }
+
+    if (setup.fog)
+    {
+        const int f = 256 - fogVis;
+        r = (r * fogVis) >> 8;
+        g = (g * fogVis) >> 8;
+        b = (b * fogVis) >> 8;
+        if (f > 5)
+            s.fogAdd = color565(setup.fogColor[0] * f >> 8, setup.fogColor[1] * f >> 8, setup.fogColor[2] * f >> 8);
+    }
+
+    s.textured = setup.texture != nullptr && !s.flat;
+    if (s.textured)
+    {
+        if (r < 250 || g < 250 || b < 250)
+            s.modulate = color565(r, g, b);
+        bool keyed = setup.texture->transparent && (g_state.alphaTest || g_state.blend);
+        // A terrain face samples one atlas tile: without transparent texels
+        // there, the cheaper unkeyed span loop draws the same pixels.
+        if (keyed && tile >= 0 && !setup.texture->tileClear[static_cast<std::size_t>(tile)])
+            keyed = false;
+        s.vertexColor = keyed ? TEXTURE_TRANSPARENT : 0;
+    }
+    else
+        s.vertexColor = color565(r, g, b);
+    s.visible = true;
+    return s;
+}
+
+// Clips, culls and rasterises one triangle with a shade from shadeTriangle.
+void rasterTriangle(const DrawSetup& setup, const TriangleShade& s, const ClipVertex& v0, const ClipVertex& v1,
+                    const ClipVertex& v2)
 {
     ++g_stats.trianglesSubmitted;
     if ((v0.outcode & v1.outcode & v2.outcode) != 0)
@@ -827,74 +941,6 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
 #endif
         return; // entirely outside one plane
     }
-
-    // Flat colour for the whole triangle, in integers.
-    int r = (v0.r + v1.r + v2.r) / 3;
-    int g = (v0.g + v1.g + v2.g) / 3;
-    int b = (v0.b + v1.b + v2.b) / 3;
-    const int a = (v0.a + v1.a + v2.a) / 3;
-
-    bool blendHalf = false;
-    if (g_state.blend)
-    {
-        // A 50% blend is the only blend there is, so faint overlays (vignettes,
-        // gradient washes) would come out far too strong -- and cost a
-        // full-screen read-modify-write. Below ~30% they are left out.
-        if (a < 77)
-            return;
-        blendHalf = a < 217 ||
-                    g_state.blendSrc == RenderBlendFactor::DstColor ||
-                    (g_state.blendSrc == RenderBlendFactor::One && g_state.blendDst == RenderBlendFactor::One);
-        // A blend into the HUD cache would mix with the key colour, not the world.
-        if (blendHalf && g_state.colorMask)
-            g_hudSawBlend = true;
-    }
-    if (g_state.alphaTest && a < 26)
-        return;
-
-    COLOR fogAdd = 0;
-    if (setup.fog)
-    {
-        const int vis = (v0.fog + v1.fog + v2.fog) / 3;
-        const int f = 256 - vis;
-        r = (r * vis) >> 8;
-        g = (g * vis) >> 8;
-        b = (b * vis) >> 8;
-        if (f > 5)
-            fogAdd = color565(setup.fogColor[0] * f >> 8, setup.fogColor[1] * f >> 8, setup.fogColor[2] * f >> 8);
-    }
-
-    const bool textured = setup.texture != nullptr;
-    COLOR vertexColor;
-    COLOR modulate = 0xFFFF;
-    if (textured)
-    {
-        if (r < 250 || g < 250 || b < 250)
-            modulate = color565(r, g, b);
-        bool keyed = setup.texture->transparent && (g_state.alphaTest || g_state.blend);
-        if (keyed && !setup.texture->tileClear.empty())
-        {
-            // A terrain face samples one atlas tile: without transparent texels
-            // there, the cheaper unkeyed span loop draws the same pixels.
-            int tu = -1, tv = -1;
-            if (v0.tileTag != 0)
-            {
-                tu = static_cast<int>((v0.tileTag >> 4) & 0xF);
-                tv = static_cast<int>(v0.tileTag & 0xF);
-            }
-            else if (g_terrainDraw)
-            {
-                const int shift = setup.texture->tileShift + 8;
-                tu = ((v0.u + v1.u + v2.u) / 3) >> shift;
-                tv = ((v0.v + v1.v + v2.v) / 3) >> shift;
-            }
-            if (tu >= 0 && tu < 16 && tv >= 0 && tv < 16 && !setup.texture->tileClear[static_cast<std::size_t>(tv) * 16 + tu])
-                keyed = false;
-        }
-        vertexColor = keyed ? TEXTURE_TRANSPARENT : 0;
-    }
-    else
-        vertexColor = color565(r, g, b);
 
     // The polygon to rasterise, by pointer: the vertices' own projections on
     // the fast path (no copies or initialisation per triangle), the clipper's
@@ -943,10 +989,10 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
     ++g_triDrawn;
 #endif
 
-    ngl_raster.blend = blendHalf;
-    ngl_raster.fog_add = fogAdd;
-    ngl_raster.modulate = modulate;
-    if (v0.tileTag != 0 && textured)
+    ngl_raster.blend = s.blendHalf;
+    ngl_raster.fog_add = s.fogAdd;
+    ngl_raster.modulate = s.modulate;
+    if (v0.tileTag != 0 && s.textured)
     {
         const int tile = setup.texWidth >> 4;
         const int tileU = static_cast<int>((v0.tileTag >> 4) & 0xF), tileV = static_cast<int>(v0.tileTag & 0xF);
@@ -960,9 +1006,36 @@ void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex
     }
     ++g_stats.trianglesDrawn;
     for (int i = 0; i < count; ++i)
-        nv[i]->c = vertexColor;
+        nv[i]->c = s.vertexColor;
+    if (s.flat)
+        glBindTexture(nullptr);
     for (int i = 1; i + 1 < count; ++i)
         nglDrawTriangleZClipped(nv[0], nv[i], nv[i + 1]);
+    if (s.flat)
+        glBindTexture(&setup.texture->desc);
+}
+
+void drawTriangle(const DrawSetup& setup, const ClipVertex& v0, const ClipVertex& v1, const ClipVertex& v2)
+{
+    if ((v0.outcode & v1.outcode & v2.outcode) != 0)
+    {
+        ++g_stats.trianglesSubmitted;
+#ifndef _TINSPIRE
+        ++g_triOutside;
+#endif
+        return; // entirely outside one plane
+    }
+    // Flat colour for the whole triangle, in integers.
+    const TriangleShade s = shadeTriangle(setup, (v0.r + v1.r + v2.r) / 3, (v0.g + v1.g + v2.g) / 3,
+                                          (v0.b + v1.b + v2.b) / 3, (v0.a + v1.a + v2.a) / 3,
+                                          (v0.fog + v1.fog + v2.fog) / 3, std::min(v0.w, std::min(v1.w, v2.w)),
+                                          v0, v1, v2);
+    if (!s.visible)
+    {
+        ++g_stats.trianglesSubmitted;
+        return;
+    }
+    rasterTriangle(setup, s, v0, v1, v2);
 }
 
 void drawLine(const DrawSetup& setup, const ClipVertex& a, const ClipVertex& b)
@@ -1174,6 +1247,7 @@ bool drawTerrainQuads(const DrawSetup& setup, const RenderInterleavedMesh& mesh,
         lightmapWidth = setup.lightmap->width;
     }
 
+    // Per corner: position, texture coordinates, clip codes.
     const auto vertex = [&](const std::uint8_t* p, ClipVertex& out) {
         const std::int32_t* pos = reinterpret_cast<const std::int32_t*>(p);
         const std::int32_t px = pos[0] >> 4, py = pos[1] >> 4, pz = pos[2] >> 4; // Q8
@@ -1181,7 +1255,6 @@ bool drawTerrainQuads(const DrawSetup& setup, const RenderInterleavedMesh& mesh,
         out.y = ((q[1] * px + q[5] * py + q[9] * pz) >> 10) + ty;
         out.z = ((q[2] * px + q[6] * py + q[10] * pz) >> 10) + tz;
         out.w = ((q[3] * px + q[7] * py + q[11] * pz) >> 10) + tw;
-        out.fog = setup.fog ? fogVisibility256(setup, out.w < 0 ? -out.w : out.w) : 256;
 
         const std::int32_t* uv = reinterpret_cast<const std::int32_t*>(p + mesh.texCoordOffset);
         const std::uint32_t tag = *reinterpret_cast<const std::uint32_t*>(p + mesh.normalOffset);
@@ -1197,40 +1270,44 @@ bool drawTerrainQuads(const DrawSetup& setup, const RenderInterleavedMesh& mesh,
             out.u = (uv[0] * texW) >> 8;
             out.v = (uv[1] * texH) >> 8;
         }
+        out.outcode = computeOutcode(out.x, out.y, out.z, out.w);
+    };
 
+    // Per quad: a terrain face has one colour and one light value at all four
+    // corners (no smooth lighting), and the triangles are shaded flat anyway.
+    const auto litColour = [&](const std::uint8_t* p, int& r, int& g, int& b, int& a) {
         if (mesh.hasColor)
         {
             const std::uint8_t* c = p + mesh.colorOffset;
-            out.r = c[0];
-            out.g = c[1];
-            out.b = c[2];
-            out.a = c[3];
+            r = c[0];
+            g = c[1];
+            b = c[2];
+            a = c[3];
         }
         else
         {
-            out.r = setup.color[0];
-            out.g = setup.color[1];
-            out.b = setup.color[2];
-            out.a = setup.color[3];
+            r = setup.color[0];
+            g = setup.color[1];
+            b = setup.color[2];
+            a = setup.color[3];
         }
         if (lightmap != nullptr)
         {
             int s = setup.lightmapS, t = setup.lightmapT;
             if (mesh.hasBrightness)
             {
-                const std::uint32_t b = *reinterpret_cast<const std::uint32_t*>(p + mesh.brightnessOffset);
-                s = static_cast<int>(b & 0xFFFFu);
-                t = static_cast<int>(b >> 16);
+                const std::uint32_t bright = *reinterpret_cast<const std::uint32_t*>(p + mesh.brightnessOffset);
+                s = static_cast<int>(bright & 0xFFFFu);
+                t = static_cast<int>(bright >> 16);
             }
             int block = s >> 4, sky = t >> 4;
             block = block < 0 ? 0 : (block > 15 ? 15 : block);
             sky = sky < 0 ? 0 : (sky > 15 ? 15 : sky);
             const std::uint8_t* lm = lightmap + (sky * lightmapWidth + block) * 4;
-            out.r = (out.r * (lm[0] + 1)) >> 8;
-            out.g = (out.g * (lm[1] + 1)) >> 8;
-            out.b = (out.b * (lm[2] + 1)) >> 8;
+            r = (r * (lm[0] + 1)) >> 8;
+            g = (g * (lm[1] + 1)) >> 8;
+            b = (b * (lm[2] + 1)) >> 8;
         }
-        out.outcode = computeOutcode(out.x, out.y, out.z, out.w);
     };
 
     const int stride = mesh.stride;
@@ -1248,11 +1325,26 @@ bool drawTerrainQuads(const DrawSetup& setup, const RenderInterleavedMesh& mesh,
             g_stats.trianglesSubmitted += 2; // both outside one plane: no projection
             continue;
         }
+        int r, g, b, a;
+        litColour(p, r, g, b, a);
+        int fog = 256;
+        if (setup.fog)
+        {
+            const std::int32_t w = (v[0].w + v[1].w + v[2].w + v[3].w) >> 2;
+            fog = fogVisibility256(setup, w < 0 ? -w : w);
+        }
+        const std::int32_t nearW = std::min(std::min(v[0].w, v[1].w), std::min(v[2].w, v[3].w));
+        const TriangleShade shade = shadeTriangle(setup, r, g, b, a, fog, nearW, v[0], v[1], v[2]);
+        if (!shade.visible)
+        {
+            g_stats.trianglesSubmitted += 2;
+            continue;
+        }
         for (ClipVertex& c : v)
             if (c.outcode == 0)
                 c.screen = project(setup, c);
-        drawTriangle(setup, v[0], v[1], v[2]);
-        drawTriangle(setup, v[0], v[2], v[3]);
+        rasterTriangle(setup, shade, v[0], v[1], v[2]);
+        rasterTriangle(setup, shade, v[0], v[2], v[3]);
     }
     return true;
 }
@@ -1915,7 +2007,7 @@ bool hudBegin(std::uint32_t stateKey, bool cacheable)
         g_hudMode = HudMode::Live;
         return true;
     }
-    constexpr int kMaxAge = 6; // frames: hearts, tooltips and the like animate
+    constexpr int kMaxAge = 12; // frames: hearts, tooltips and the like animate
     if (g_hudValid && stateKey == g_hudKey && ++g_hudAge < kMaxAge)
         return false; // hudEnd composites the cached HUD
     constexpr std::size_t kPixels = static_cast<std::size_t>(NspireSystem::kScreenWidth) * NspireSystem::kScreenHeight;

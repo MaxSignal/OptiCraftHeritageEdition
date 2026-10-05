@@ -2484,14 +2484,18 @@ bool RenderGlobal::updateRenderers(EntityLiving *entityliving, bool flag)
 
 #if PLATFORM_NEAR_MESH_BUDGET_MS > 0
 	// A section in the player's own or a neighbouring column that is still
-	// unbuilt (or dirty) and on screen is a hole in the ground the player can
-	// see and walk into -- invisible terrain that still collides. Until those
-	// are filled the frame spends a larger budget on them; with the regular
-	// streaming budget a slow CPU could fall seconds behind walking speed.
+	// unbuilt and on screen is a hole in the ground the player can see and walk
+	// into -- invisible terrain that still collides. Until those are filled the
+	// frame spends a larger budget on them; with the regular streaming budget a
+	// slow CPU could fall seconds behind walking speed. A section that is only
+	// dirty keeps drawing its previous mesh: light spreading and neighbouring
+	// chunks being populated mark those constantly while the player moves
+	// (about five times as often as new sections appear), and boosting for them
+	// kept the calculator meshing ~120 ms of every frame.
 	for (std::size_t i = 0; i < sortedCandidateCount; ++i)
 	{
 		WorldRenderer *candidate = rendererUpdateCandidates[i];
-		if (candidate == nullptr || !candidate->needsUpdate)
+		if (candidate == nullptr || !candidate->needsUpdate || candidate->hasPublishedTerrain())
 			continue;
 		const int_t ring = distanceRing(candidate);
 		if (ring <= 1 && (candidate->isInFrustum || ring == 0))
