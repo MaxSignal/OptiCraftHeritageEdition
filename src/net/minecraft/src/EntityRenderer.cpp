@@ -1460,7 +1460,10 @@ void EntityRenderer::updateCameraAndRender(float partialTicks)
     if (mc->theWorld != nullptr && mc->currentScreen != nullptr && !mc->isSplitScreenActive())
     {
         static int s_idleFrames = 0;
-        const bool activity = NspireKeypad::takeActivity();
+        static const GuiScreen *s_lastScreen = nullptr;
+        // A screen that just replaced another is drawn at once, keys or not.
+        const bool activity = NspireKeypad::takeActivity() || mc->currentScreen != s_lastScreen;
+        s_lastScreen = mc->currentScreen;
         if (NglBackend::hasBackdrop() && !activity && ++s_idleFrames < 10)
         {
             NglBackend::holdFrame();
@@ -1550,7 +1553,27 @@ void EntityRenderer::updateCameraAndRender(float partialTicks)
 #if PLATFORM_NSPIRE
     else if (nspireBackdrop)
     {
-        // The world and HUD came from the backdrop.
+        // The world and HUD came from the backdrop. The state they would have
+        // left behind (the HUD's overlay reset in particular) is set here, or
+        // the screen inherits the previous frame's: the survival inventory's
+        // player preview left lighting on and the whole screen came out dark.
+        disableLightmap(partialTicks);
+        setupOverlayRendering();
+        renderMatrixMode(RenderMatrixMode::Texture);
+        renderLoadIdentity();
+        renderMatrixMode(RenderMatrixMode::ModelView);
+        RenderHelper::disableStandardItemLighting();
+        renderDisable(RenderCapability::Lighting);
+        renderDisable(RenderCapability::Fog);
+        renderDisable(RenderCapability::CullFace);
+        renderDisable(RenderCapability::RescaleNormal);
+        renderEnable(RenderCapability::Texture2D);
+        renderEnable(RenderCapability::AlphaTest);
+        renderBlendFunc(RenderBlendFactor::SrcAlpha, RenderBlendFactor::OneMinusSrcAlpha);
+        renderEnable(RenderCapability::DepthTest);
+        renderDepthFunc(RenderCompare::LessEqual);
+        renderDepthMask(true);
+        renderColor4f(1.0f, 1.0f, 1.0f, 1.0f);
     }
 #endif
     else

@@ -407,21 +407,27 @@ struct MatrixCache
     // then got span widths of 7 or 9 for 8-texel glyphs and the text came out
     // garbled. Exact here, a pixel coordinate lands on the pixel.
     bool ortho = false;
+    std::int32_t projHi[16] = {}; // the orthographic projection in Q24
     std::int32_t mvpHi[16] = {};
 } g_matrixCache;
 
 constexpr int kHiShift = 24;
 
-void orthoProductHi(const Mat4& proj, const Mat4& mv, std::int32_t out[16])
+// proj (an orthographic projection, every term Q24) * mv (FixedMatrix: linear
+// terms Q16, translation Q12, bottom row Q16), all in Q24. Integer products
+// only: the GUI changes the modelview for nearly every element it draws.
+void orthoProductHi(const std::int32_t proj[16], const FixedMatrix& mv, std::int32_t out[16])
 {
     for (int c = 0; c < 4; ++c)
         for (int row = 0; row < 4; ++row)
         {
-            double sum = 0.0;
+            std::int64_t sum = 0;
             for (int k = 0; k < 4; ++k)
-                sum += static_cast<double>(proj.m[k * 4 + row]) * mv.m[c * 4 + k];
-            const double scaled = sum * static_cast<double>(1 << kHiShift);
-            out[c * 4 + row] = static_cast<std::int32_t>(scaled < 0.0 ? scaled - 0.5 : scaled + 0.5);
+            {
+                const int shift = fixedFormat(c * 4 + k); // the mv term's fraction bits
+                sum += (static_cast<std::int64_t>(proj[k * 4 + row]) * mv.m[c * 4 + k]) >> shift;
+            }
+            out[c * 4 + row] = static_cast<std::int32_t>(sum);
         }
 }
 
@@ -587,6 +593,10 @@ void eyeNormal(const DrawSetup& setup, const std::int32_t n[3], std::int32_t en[
                                            static_cast<std::int64_t>(m[8 + r]) * n[2]) >> 9);
 }
 
+// The last normal processVertex lit within the current draw (0: none).
+std::uint32_t g_litKey = 0;
+int g_lit[3] = {256, 256, 256};
+
 // `fixedData`: the vertex comes from a mesh this backend captured, whose
 // positions are already Q12 and texture coordinates Q16 (see
 // renderCaptureInterleaved); otherwise they are the Tessellator's floats.
@@ -738,10 +748,28 @@ void processVertex(const DrawSetup& setup, const RenderInterleavedMesh& mesh, co
         if (mesh.hasNormals)
         {
             const std::int8_t* nb = reinterpret_cast<const std::int8_t*>(base + mesh.normalOffset);
-            const std::int32_t n[3] = {nb[0], nb[1], nb[2]};
-            std::int32_t en[3];
-            eyeNormal(setup, n, en);
-            lightFactors(setup, en, lit);
+            // A box face's four corners share a normal: light it once (the
+            // normalisation is an integer square root).
+            const std::uint32_t key = 0x1000000u | static_cast<std::uint8_t>(nb[0]) |
+                                      static_cast<std::uint32_t>(static_cast<std::uint8_t>(nb[1])) << 8 |
+                                      static_cast<std::uint32_t>(static_cast<std::uint8_t>(nb[2])) << 16;
+            if (key == g_litKey)
+            {
+                lit[0] = g_lit[0];
+                lit[1] = g_lit[1];
+                lit[2] = g_lit[2];
+            }
+            else
+            {
+                const std::int32_t n[3] = {nb[0], nb[1], nb[2]};
+                std::int32_t en[3];
+                eyeNormal(setup, n, en);
+                lightFactors(setup, en, lit);
+                g_litKey = key;
+                g_lit[0] = lit[0];
+                g_lit[1] = lit[1];
+                g_lit[2] = lit[2];
+            }
         }
         out.r = (out.r * lit[0]) >> 8;
         out.g = (out.g * lit[1]) >> 8;
@@ -1149,10 +1177,16 @@ bool prepareDraw(DrawSetup& setup)
         cache.mvp = multiply(cache.proj, cache.mv);
         cache.mvSerial = g_matrixSerial[0];
         cache.projSerial = g_matrixSerial[1];
-        const Mat4& proj = g_state.stacks[1].back();
-        cache.ortho = proj.m[3] == 0.0f && proj.m[7] == 0.0f && proj.m[11] == 0.0f && proj.m[15] == 1.0f;
+        if (projChanged)
+        {
+            const Mat4& proj = g_state.stacks[1].back();
+            cache.ortho = proj.m[3] == 0.0f && proj.m[7] == 0.0f && proj.m[11] == 0.0f && proj.m[15] == 1.0f;
+            if (cache.ortho)
+                for (int i = 0; i < 16; ++i)
+                    cache.projHi[i] = NglFixed::fromFloat(proj.m[i], kHiShift);
+        }
         if (cache.ortho)
-            orthoProductHi(proj, g_state.stacks[0].back(), cache.mvpHi);
+            orthoProductHi(cache.projHi, cache.mv, cache.mvpHi);
     }
     setup.mv = cache.mv;
     setup.mvp = cache.mvp;
@@ -1443,6 +1477,7 @@ bool drawMeshNow(const RenderInterleavedMesh& mesh, bool fixedData = false)
         finishDraw();
         return true;
     }
+    g_litKey = 0; // the lights and the modelview are this draw's
     g_vertexScratch.resize(static_cast<std::size_t>(mesh.count));
     for (int i = 0; i < mesh.count; ++i)
         processVertex(setup, mesh, base + static_cast<std::size_t>(i) * mesh.stride, fixedData, g_vertexScratch[i]);
@@ -2676,8 +2711,53 @@ void renderTranslate(float x, float y, float z)
     bumpCurrentMatrix();
 }
 
+namespace
+{
+// sin over a full turn in 4096 steps, for renderRotate: model parts rotate
+// about the axes several times each per entity per frame, and sinf/cosf, the
+// axis normalisation and a full 4x4 product are all soft-float on the ARM9.
+constexpr int kSinSteps = 4096;
+float g_sinTable[kSinSteps];
+bool g_sinTableReady = false;
+
+void sinCosDegrees(float degrees, float& s, float& c)
+{
+    if (!g_sinTableReady)
+    {
+        for (int i = 0; i < kSinSteps; ++i)
+            g_sinTable[i] = static_cast<float>(std::sin(i * (2.0 * 3.14159265358979323846 / kSinSteps)));
+        g_sinTableReady = true;
+    }
+    const int index = static_cast<int>(degrees * (kSinSteps / 360.0f) + (degrees < 0.0f ? -0.5f : 0.5f));
+    s = g_sinTable[index & (kSinSteps - 1)];
+    c = g_sinTable[(index + kSinSteps / 4) & (kSinSteps - 1)];
+}
+}
+
 void renderRotate(float angle, float x, float y, float z)
 {
+    // About one of the axes (nearly every call): only two columns change.
+    const int axis = (y == 0.0f && z == 0.0f) ? 0 : (x == 0.0f && z == 0.0f) ? 1 : (x == 0.0f && y == 0.0f) ? 2 : -1;
+    if (axis >= 0 && (x != 0.0f || y != 0.0f || z != 0.0f))
+    {
+        const float component = axis == 0 ? x : (axis == 1 ? y : z);
+        float s, c;
+        sinCosDegrees(component < 0.0f ? -angle : angle, s, c);
+        // M * R, R the rotation about the axis: columns a, b are the two it mixes.
+        const int a = axis == 0 ? 1 : 0;
+        const int b = axis == 2 ? 1 : 2;
+        // About Y the sign of the mix flips (right-handed: z x x = y).
+        const float sab = axis == 1 ? -s : s;
+        Mat4& m = currentMatrix();
+        for (int row = 0; row < 4; ++row)
+        {
+            const float ma = m.m[a * 4 + row], mb = m.m[b * 4 + row];
+            m.m[a * 4 + row] = c * ma + sab * mb;
+            m.m[b * 4 + row] = c * mb - sab * ma;
+        }
+        bumpCurrentMatrix();
+        return;
+    }
     const float len = std::sqrt(x * x + y * y + z * z);
     if (len < 1e-6f)
         return;

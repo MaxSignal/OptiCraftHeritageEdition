@@ -287,10 +287,12 @@
 // EntityCreature::updatePlayerActionState is staggered. NEAR is half the
 // entity render radius below; a mob further than that is small on screen and
 // its path work is not. Divisors are powers of two (EntityLiving masks them).
+// 8 / 16 (from 24 / 40): a village's dozen villagers decided every tick cost
+// ~22 ms a tick in the device log, against a one-chunk view.
 #undef  PLATFORM_ENTITY_AI_NEAR_RADIUS_BLOCKS
-#define PLATFORM_ENTITY_AI_NEAR_RADIUS_BLOCKS    24.0f
+#define PLATFORM_ENTITY_AI_NEAR_RADIUS_BLOCKS    8.0f
 #undef  PLATFORM_ENTITY_AI_FAR_RADIUS_BLOCKS
-#define PLATFORM_ENTITY_AI_FAR_RADIUS_BLOCKS     40.0f
+#define PLATFORM_ENTITY_AI_FAR_RADIUS_BLOCKS     16.0f
 #undef  PLATFORM_ENTITY_AI_MID_TICK_DIVISOR
 #define PLATFORM_ENTITY_AI_MID_TICK_DIVISOR      2
 #undef  PLATFORM_ENTITY_AI_FAR_TICK_DIVISOR
@@ -299,10 +301,12 @@
 // Living entities beyond the terrain distance cull
 // (PLATFORM_NSPIRE_DISTANCE_CULL_RADIUS) stand on terrain that is not drawn, so
 // skip their animated-model submission. Frustum-exempt entities are unaffected.
+// 12 (from 20): fog hides the terrain from 16 blocks on, and each villager
+// drawn was a few ms of model transforms.
 #undef  PLATFORM_LIMIT_ENTITY_RENDER_DISTANCE
 #define PLATFORM_LIMIT_ENTITY_RENDER_DISTANCE    1
 #undef  PLATFORM_ENTITY_RENDER_RADIUS_BLOCKS
-#define PLATFORM_ENTITY_RENDER_RADIUS_BLOCKS     20.0f
+#define PLATFORM_ENTITY_RENDER_RADIUS_BLOCKS     12.0f
 
 // Entity-entity push resolution is only observable near the player; beyond
 // the render radius skip the chunk/AABB scan and keep everything else.
