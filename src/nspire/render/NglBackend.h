@@ -36,8 +36,8 @@ std::size_t meshBytes();
 std::size_t textureBytes();
 
 // The 3D world pass of a frame. While it is open, drawing goes to a
-// half-resolution target (a quarter of the pixels to fill); closing it scales
-// that up into the frame and clears depth for the GUI drawn on top.
+// one-third-resolution target (107x80, a ninth of the pixels to fill); closing it scales
+// that up 3x into the frame and clears depth for the GUI drawn on top.
 void beginWorldPass();
 void endWorldPass();
 

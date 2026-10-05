@@ -163,13 +163,18 @@ std::unordered_map<int, std::unique_ptr<NglTexture>> g_textures;
 int g_nextTextureName = 1;
 bool g_initialized = false;
 
-// Half-resolution world pass (NglBackend::beginWorldPass).
+// Low-resolution world pass (NglBackend::beginWorldPass).
 #ifndef _TINSPIRE
 const bool g_lowResWorld = std::getenv("NSPIRE_SIM_FULLRES") == nullptr;
 #else
 constexpr bool g_lowResWorld = true;
 #endif
 bool g_inWorldPass = false;
+// The world pass is drawn at a third of the screen in each direction and
+// scaled up 3x: 107x80 (the 321st column falls off the right edge).
+constexpr int kWorldScale = 3;
+constexpr int kWorldW = (NspireSystem::kScreenWidth + kWorldScale - 1) / kWorldScale;
+constexpr int kWorldH = NspireSystem::kScreenHeight / kWorldScale;
 std::vector<COLOR> g_lowResBuffer;
 COLOR* g_target = nullptr; // the buffer nGL draws into
 // Set when the world pass closes: the GUI drawn on top needs a clear depth
@@ -180,7 +185,7 @@ bool g_guiDepthStale = false;
 // Drawing a terrain section (drawStoredMesh): every quad samples one atlas tile.
 bool g_terrainDraw = false;
 // Eye depth (clip w, Q12) beyond which terrain faces are drawn flat (drawTriangle).
-constexpr std::int32_t kFlatTerrainW = 10 << 12;
+constexpr std::int32_t kFlatTerrainW = 7 << 12;
 
 // HUD cache (NglBackend::hudBegin). The HUD is drawn into its own frame over a
 // key colour every few frames; the frames between copy the non-key pixels of
@@ -889,7 +894,7 @@ TriangleShade shadeTriangle(const DrawSetup& setup, int r, int g, int b, int a, 
     }
 
     // Far terrain faces in one flat colour: the tile's average texel, lit. At
-    // 160x120 a block ten blocks away is a few pixels across, too small for
+    // 107x80 a block seven blocks away is a few pixels across, too small for
     // its texture to show, and a flat span skips the texel fetch and the
     // per-pixel colour multiply.
     if (g_terrainDraw && tile >= 0 && farW > kFlatTerrainW && !setup.texture->tileClear[static_cast<std::size_t>(tile)])
@@ -1149,9 +1154,11 @@ bool prepareDraw(DrawSetup& setup)
     setup.screenHeight = NspireSystem::kScreenHeight;
     if (g_inWorldPass)
     {
-        for (int& v : setup.viewport)
-            v >>= 1;
-        setup.screenHeight >>= 1;
+        setup.viewport[0] = setup.viewport[0] * kWorldW / NspireSystem::kScreenWidth;
+        setup.viewport[2] = setup.viewport[2] * kWorldW / NspireSystem::kScreenWidth;
+        setup.viewport[1] = setup.viewport[1] * kWorldH / NspireSystem::kScreenHeight;
+        setup.viewport[3] = setup.viewport[3] * kWorldH / NspireSystem::kScreenHeight;
+        setup.screenHeight = kWorldH;
     }
     setup.depthOffset = g_state.polygonOffset ? NglFixed::fromFloat(g_state.polygonOffsetUnits, 8) * 8 : 0;
 
@@ -1965,8 +1972,8 @@ void beginWorldPass()
     g_inWorldPass = true;
     g_target = g_lowResBuffer.data();
     nglSetBuffer(g_target);
-    ngl_clip_w = NspireSystem::kScreenWidth / 2;
-    ngl_clip_h = NspireSystem::kScreenHeight / 2;
+    ngl_clip_w = kWorldW;
+    ngl_clip_h = kWorldH;
 }
 
 void endWorldPass()
@@ -1974,17 +1981,25 @@ void endWorldPass()
     if (!g_inWorldPass)
         return;
     g_inWorldPass = false;
-    // 2x2 pixel replication of the top-left quarter into the frame.
+    // 3x3 pixel replication of the top-left kWorldW x kWorldH into the frame.
     constexpr int kW = NspireSystem::kScreenWidth;
     const COLOR* src = g_lowResBuffer.data();
     COLOR* dst = NspireSystem::backBuffer();
-    for (int y = 0; y < NspireSystem::kScreenHeight / 2; ++y)
+    for (int y = 0; y < kWorldH; ++y)
     {
         const COLOR* row = src + y * kW;
-        std::uint32_t* out = reinterpret_cast<std::uint32_t*>(dst + 2 * y * kW);
-        for (int x = 0; x < kW / 2; ++x)
-            out[x] = static_cast<std::uint32_t>(row[x]) * 0x00010001u;
-        std::memcpy(dst + (2 * y + 1) * kW, dst + 2 * y * kW, kW * sizeof(COLOR));
+        COLOR* out = dst + kWorldScale * y * kW;
+        for (int x = 0; x < kW; x += kWorldScale)
+        {
+            const COLOR c = row[x / kWorldScale];
+            out[x] = c;
+            if (x + 1 < kW)
+                out[x + 1] = c;
+            if (x + 2 < kW)
+                out[x + 2] = c;
+        }
+        for (int k = 1; k < kWorldScale; ++k)
+            std::memcpy(out + k * kW, out, kW * sizeof(COLOR));
     }
     g_target = dst;
     nglSetBuffer(dst);
