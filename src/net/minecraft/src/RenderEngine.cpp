@@ -1634,9 +1634,15 @@ bool RenderEngine::updateStaticProceduralTextureFx(TextureFX *texturefx)
 
 	const int_t icon = texturefx->iconIndex;
 	const bool portal = Block::portal != nullptr && icon == Block::portal->blockIndexInTexture;
+#if PLATFORM_NSPIRE
+	// Animations default to off on the calculator: water and lava get one
+	// generated frame too, instead of the atlas's flat placeholder tile.
+	const bool fire = !portal;
+#else
 	const bool fire = Block::fire != nullptr && (icon == Block::fire->blockIndexInTexture || icon == Block::fire->blockIndexInTexture + 16);
 	if (!portal && !fire)
 		return false;
+#endif
 
 	const bool anaglyph = options != nullptr && options->anaglyph;
 	texturefx->anaglyphEnabled = anaglyph;

@@ -85,5 +85,10 @@
 #define PLATFORM_FAST_PARTICLE_PHYSICS        1
 #undef  PLATFORM_MAX_PARTICLES_PER_LAYER
 #define PLATFORM_MAX_PARTICLES_PER_LAYER      128
+// No particles at all, as on PS2: a broken block alone spawned 64, each a
+// live entity with a collision sweep per tick, and randomDisplayTick's torch,
+// lava and portal effects searched 1000 blocks a tick for them.
+#undef  PLATFORM_SKIP_WORLD_PARTICLES
+#define PLATFORM_SKIP_WORLD_PARTICLES         1
 #undef  PLATFORM_CULL_MISSING_CHUNK_BOUNDARY_FACES
 #define PLATFORM_CULL_MISSING_CHUNK_BOUNDARY_FACES 1

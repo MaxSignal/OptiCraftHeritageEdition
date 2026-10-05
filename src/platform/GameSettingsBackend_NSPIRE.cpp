@@ -110,7 +110,40 @@ void platformGameSettingsUpdateRenderDistanceFromFine(int_t fineDistance, int_t&
 }
 
 bool platformGameSettingsAnaglyphValue(bool, bool) { return false; }
-bool platformGameSettingsLoadOption(GameSettings&, const std::string&, const std::string&) { return false; }
+
+// Texture animations (water, lava, fire, portal, redstone, explosion, flame,
+// smoke and texture-pack animations) default to off: each is a soft-float
+// pass over its tiles, ~30 ms per update on the calculator. Applied once to
+// fresh settings and to option files from builds before this default; the
+// marker key keeps a player's later choice in the options screen.
+namespace
+{
+constexpr const char* kQuietDefaultsKey = "nspireQuietDefaults";
+bool g_quietDefaultsApplied = false;
+
+void applyQuietDefaults(GameSettings& settings)
+{
+	settings.ofAnimatedWater = 2;
+	settings.ofAnimatedLava = 2;
+	settings.ofAnimatedFire = false;
+	settings.ofAnimatedPortal = false;
+	settings.ofAnimatedRedstone = false;
+	settings.ofAnimatedExplosion = false;
+	settings.ofAnimatedFlame = false;
+	settings.ofAnimatedSmoke = false;
+	settings.ofAnimatedTextures = false;
+	settings.particleSetting = 2;
+	g_quietDefaultsApplied = true;
+}
+}
+
+bool platformGameSettingsLoadOption(GameSettings&, const std::string& key, const std::string& value)
+{
+	if (key != kQuietDefaultsKey)
+		return false;
+	g_quietDefaultsApplied = value == "true";
+	return true;
+}
 
 void platformGameSettingsFinalizeLoad(GameSettings& settings)
 {
@@ -122,7 +155,12 @@ void platformGameSettingsFinalizeLoad(GameSettings& settings)
 	settings.ofChunkUpdates = std::max(settings.ofChunkUpdates, (int_t)1);
 	platformGameSettingsApplyLegacyCrafting(settings);
 	applyMovementKeys(settings);
+	if (!g_quietDefaultsApplied)
+		applyQuietDefaults(settings);
 }
 void platformGameSettingsSyncControllerBindings(const GameSettings&) {}
-void platformGameSettingsAddKnownKeys(std::unordered_set<std::string>&) {}
-void platformGameSettingsWriteOptions(const GameSettings&, std::ostream&) {}
+void platformGameSettingsAddKnownKeys(std::unordered_set<std::string>& keys) { keys.insert(kQuietDefaultsKey); }
+void platformGameSettingsWriteOptions(const GameSettings&, std::ostream& out)
+{
+	out << kQuietDefaultsKey << ":" << (g_quietDefaultsApplied ? "true" : "false") << "\n";
+}
