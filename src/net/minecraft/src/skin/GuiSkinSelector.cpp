@@ -799,7 +799,15 @@ void GuiSkinSelector::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick
     // Draw pack cover art
     if (mc != nullptr && mc->renderEngine != nullptr)
     {
+#ifdef NSPIRE_PLATFORM
+        // Packs built from the player's own Minecraft have no skin pack cover;
+        // the game's pack icon stands in for the missing-texture checkerboard.
+        const char *cover = mc->renderEngine->hasResource("/skins/default_pack.png")
+            ? "/skins/default_pack.png" : "/pack.png";
+        int coverTex = mc->renderEngine->getTexture(cover);
+#else
         int coverTex = mc->renderEngine->getTexture("/skins/default_pack.png");
+#endif
         if (coverTex >= 0)
         {
             mc->renderEngine->bindTexture(coverTex);

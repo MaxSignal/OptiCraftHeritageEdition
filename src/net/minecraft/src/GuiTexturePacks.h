@@ -19,6 +19,10 @@ public:
 	void drawScreen(int_t mouseX, int_t mouseY, float_t partialTick) override;
 
 protected:
+#ifdef NSPIRE_PLATFORM
+	bool usesSpecializedMenuNavigation() const override;
+	void keyTyped(char_t c, int_t key) override;
+#endif
 	void actionPerformed(GuiButton *button) override;
 	void mouseClicked(int_t x, int_t y, int_t button) override;
 	void mouseMovedOrUp(int_t x, int_t y, int_t button) override;

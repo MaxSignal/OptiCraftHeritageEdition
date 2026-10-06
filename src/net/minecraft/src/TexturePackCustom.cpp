@@ -11,6 +11,88 @@
 #include "RenderEngine.h"
 #include "platform/RenderAPI.h"
 
+#if OPTICRAFT_TEXTURE_PACK_MINIZIP
+#include <map>
+#include "unzip.h"
+
+// A standard texture pack zip, as a player downloads it. Its central directory
+// is read once into `entries`, so a texture lookup seeks straight to the file
+// instead of scanning the directory on the calculator's flash each time.
+struct TexturePackCustom::ZipIndex
+{
+	unzFile file = nullptr;
+	// Some packs wrap everything in one folder ("MyPack/terrain.png").
+	std::string prefix;
+	std::map<std::string, unz_file_pos> entries;
+
+	~ZipIndex()
+	{
+		if (file != nullptr)
+			unzClose(file);
+	}
+
+	static std::unique_ptr<ZipIndex> open(const std::string &path)
+	{
+		unzFile file = unzOpen(path.c_str());
+		if (file == nullptr)
+		{
+			MC_LOG_ERROR("resources", "Failed to open texture pack: %s\n", path.c_str());
+			return nullptr;
+		}
+		std::unique_ptr<ZipIndex> index(new ZipIndex());
+		index->file = file;
+		char name[512];
+		for (int status = unzGoToFirstFile(file); status == UNZ_OK; status = unzGoToNextFile(file))
+		{
+			unz_file_info info;
+			if (unzGetCurrentFileInfo(file, &info, name, sizeof(name), nullptr, 0, nullptr, 0) != UNZ_OK)
+				continue;
+			const std::string entry(name);
+			if (entry.empty() || entry.back() == '/')
+				continue;
+			unz_file_pos position;
+			if (unzGetFilePos(file, &position) == UNZ_OK)
+				index->entries[entry] = position;
+		}
+		if (index->entries.count("terrain.png") == 0 && index->entries.count("pack.txt") == 0)
+		{
+			for (const auto &entry : index->entries)
+			{
+				const std::size_t slash = entry.first.find('/');
+				if (slash == std::string::npos)
+					continue;
+				const std::string folder = entry.first.substr(0, slash + 1);
+				if (index->entries.count(folder + "terrain.png") != 0 || index->entries.count(folder + "pack.txt") != 0)
+				{
+					index->prefix = folder;
+					break;
+				}
+			}
+		}
+		return index;
+	}
+
+	// `name` relative to the pack root, without a leading '/'.
+	bool read(const std::string &name, std::string &out)
+	{
+		const auto it = entries.find(prefix + name);
+		if (it == entries.end())
+			return false;
+		unz_file_pos position = it->second;
+		unz_file_info info;
+		if (unzGoToFilePos(file, &position) != UNZ_OK ||
+			unzGetCurrentFileInfo(file, &info, nullptr, 0, nullptr, 0, nullptr, 0) != UNZ_OK ||
+			unzOpenCurrentFile(file) != UNZ_OK)
+			return false;
+		out.resize(info.uncompressed_size);
+		const int bytesRead = info.uncompressed_size == 0 ? 0
+			: unzReadCurrentFile(file, &out[0], static_cast<unsigned>(info.uncompressed_size));
+		unzCloseCurrentFile(file);
+		return bytesRead == static_cast<int>(info.uncompressed_size);
+	}
+};
+#endif
+
 TexturePackCustom::TexturePackCustom(const std::string &file) :
 	texturePackZipFile(nullptr),
 	texturePackName(-1),
@@ -87,6 +169,36 @@ void TexturePackCustom::getTexturePackFolder(Minecraft *minecraft)
 	}
 
 	zip_close(zipfile);
+#elif OPTICRAFT_TEXTURE_PACK_MINIZIP
+	std::unique_ptr<ZipIndex> index = ZipIndex::open(texturePackFile);
+	if (index == nullptr)
+		return;
+
+	std::string text;
+	if (index->read("pack.txt", text))
+	{
+		std::istringstream iss(text);
+		std::string line;
+		if (std::getline(iss, line))
+			firstDescriptionLine = truncateString(line);
+		if (std::getline(iss, line))
+			secondDescriptionLine = truncateString(line);
+	}
+
+	texturePackThumbnail.reset();
+	std::string image;
+	if (index->read("pack.png", image))
+	{
+		try
+		{
+			std::istringstream imageStream(image, std::ios::in | std::ios::binary);
+			texturePackThumbnail.reset(new BufferedImage(BufferedImage::ImageIO_read(imageStream)));
+		}
+		catch (...)
+		{
+			texturePackThumbnail.reset();
+		}
+	}
 #endif
 }
 
@@ -105,7 +217,7 @@ void TexturePackCustom::bindThumbnailTexture(Minecraft *minecraft)
 	if (minecraft == nullptr || minecraft->renderEngine == nullptr)
 		return;
 
-#ifdef MCBETA_HAVE_LIBZIP
+#if defined(MCBETA_HAVE_LIBZIP) || OPTICRAFT_TEXTURE_PACK_MINIZIP
 	if (texturePackThumbnail != nullptr && texturePackName < 0)
 		texturePackName = minecraft->renderEngine->allocateAndSetupTexture(texturePackThumbnail.get());
 	if (texturePackThumbnail != nullptr && texturePackName >= 0)
@@ -123,6 +235,8 @@ void TexturePackCustom::loadTexturePack()
 #ifdef MCBETA_HAVE_LIBZIP
 	int err = 0;
 	texturePackZipFile = zip_open(texturePackFile.c_str(), 0, &err);
+#elif OPTICRAFT_TEXTURE_PACK_MINIZIP
+	texturePackIndex = ZipIndex::open(texturePackFile);
 #endif
 }
 
@@ -134,6 +248,8 @@ void TexturePackCustom::closeTexturePackFile()
 		zip_close(texturePackZipFile);
 		texturePackZipFile = nullptr;
 	}
+#elif OPTICRAFT_TEXTURE_PACK_MINIZIP
+	texturePackIndex.reset();
 #endif
 }
 
@@ -156,6 +272,11 @@ std::istream* TexturePackCustom::getResourceAsStream(const std::string &s)
 			}
 		}
 	}
+#elif OPTICRAFT_TEXTURE_PACK_MINIZIP
+	// Files the pack does not replace come from the game's own assets.
+	std::string data;
+	if (texturePackIndex != nullptr && !s.empty() && texturePackIndex->read(s.substr(1), data))
+		return new std::istringstream(data, std::ios::in | std::ios::binary);
 #endif
 	return TexturePackBase::getResourceAsStream(s);
 }
@@ -183,6 +304,26 @@ std::vector<std::string> TexturePackCustom::listResources(const std::string &pre
 		result.push_back('/' + name);
 	}
 	std::sort(result.begin(), result.end());
+	return result;
+#elif OPTICRAFT_TEXTURE_PACK_MINIZIP
+	std::vector<std::string> result;
+	if (texturePackIndex == nullptr)
+		return result;
+	std::string normalizedPrefix = prefix;
+	while (!normalizedPrefix.empty() && normalizedPrefix.front() == '/')
+		normalizedPrefix.erase(normalizedPrefix.begin());
+	const std::string &root = texturePackIndex->prefix;
+	for (const auto &entry : texturePackIndex->entries)
+	{
+		if (entry.first.compare(0, root.size(), root) != 0)
+			continue;
+		const std::string name = entry.first.substr(root.size());
+		if (name.rfind(normalizedPrefix, 0) != 0)
+			continue;
+		if (!suffix.empty() && (name.size() < suffix.size() || name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0))
+			continue;
+		result.push_back('/' + name);
+	}
 	return result;
 #else
 	return TexturePackBase::listResources(prefix, suffix);

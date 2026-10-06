@@ -1,5 +1,6 @@
 #include "SkinManager.h"
 #include "Minecraft.h"
+#include "RenderEngine.h"
 #include "GameSettings.h"
 #include "EntityPlayerSP.h"
 #include "java/File.h"
@@ -225,6 +226,27 @@ void SkinManager::init()
     s_defaultSkins.push_back({"Crocodile", "Crocodile", "/skins/Crocodile.png", "/skins/Crocodile_32.png", "/skins/Crocodile_Front.png", false, ""});
     s_defaultSkins.push_back({"LegacySquid", "Legacy Squid", "/skins/LegacySquid.png", "/skins/LegacySquid_32.png", "/skins/LegacySquid_Front.png", false, ""});
 
+#ifdef NSPIRE_PLATFORM
+    // A pack built from the player's own Minecraft (opticraft-assetgen) has
+    // none of the Legacy console skins above. Leave out the ones whose texture
+    // is missing instead of listing missing-texture checkerboards, and give
+    // Steve the game's own char.png under the same id, so a saved choice holds.
+    Minecraft *mc = Minecraft::getMinecraft();
+    if (mc != nullptr && mc->renderEngine != nullptr)
+    {
+        const bool steveMissing = !mc->renderEngine->hasResource(s_defaultSkins.front().skinPath);
+        std::vector<SkinEntry> available;
+        if (steveMissing)
+            available.push_back({"LegacySteve", "Steve", "/mob/char.png", "/mob/char.png", "", false, ""});
+        for (const SkinEntry &skin : s_defaultSkins)
+        {
+            if (mc->renderEngine->hasResource(skin.skinPath))
+                available.push_back(skin);
+        }
+        s_defaultSkins.swap(available);
+    }
+#endif
+
     s_initialized = true;
 
     // Scan custom skins installed in storage
@@ -253,6 +275,11 @@ void SkinManager::scanCustomSkins()
 
     std::vector<std::string> searchDirs;
     std::string primaryDir = getSkinsDir();
+#ifdef NSPIRE_PLATFORM
+    // Created up front so the player finds where to copy skins to.
+    if (!PlatformStorage::exists(primaryDir))
+        PlatformStorage::mkdirs(primaryDir);
+#endif
     searchDirs.push_back(primaryDir);
 
 #ifdef PS2_PLATFORM
@@ -280,7 +307,14 @@ void SkinManager::scanCustomSkins()
 
             std::string lower = entry;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-            if (lower.compare(lower.size() - 4, 4, ".png") != 0)
+            // "Steve.png.tns" counts as "Steve.png": TI's transfer software
+            // only moves files ending in .tns onto the TI-Nspire.
+            std::size_t extensionLength = 0;
+            if (lower.size() > 8 && lower.compare(lower.size() - 8, 8, ".png.tns") == 0)
+                extensionLength = 8;
+            else if (lower.compare(lower.size() - 4, 4, ".png") == 0)
+                extensionLength = 4;
+            else
                 continue;
 
             // Skip companion files generated automatically
@@ -299,7 +333,7 @@ void SkinManager::scanCustomSkins()
             if (w != 64 || (h != 32 && h != 64))
                 continue;
 
-            std::string baseName = entry.substr(0, entry.size() - 4);
+            std::string baseName = entry.substr(0, entry.size() - extensionLength);
             std::string id = "custom_" + baseName;
 
             if (std::find(seenIds.begin(), seenIds.end(), id) != seenIds.end())
