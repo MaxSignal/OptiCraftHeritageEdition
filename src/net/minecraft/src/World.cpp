@@ -821,12 +821,32 @@ void World::setSpawnLocation()
     int z = worldInfo->getSpawnZ();
     int_t attempts = 0;
 
-    while (getFirstUncoveredBlock(x, z) == 0)
+    // Vanilla takes the first uncovered block above y = 63. In a superflat
+    // world (ground at y = 3) that is always air, so every attempt failed and
+    // the spawn random-walked 10000 steps -- hundreds of blocks away, and on
+    // the bounded consoles into chunks that are not loaded, where a respawned
+    // player was left stuck in the dark. Search from the provider's ground
+    // level instead, and keep the old spawn if nothing is found.
+    const int_t groundY = worldProvider->getAverageGroundLevel() - 1;
+    auto firstUncoveredBlock = [this, groundY](int_t bx, int_t bz)
+    {
+        int_t y = groundY;
+        while (!isAirBlock(bx, y + 1, bz))
+            y++;
+        return getBlockId(bx, y, bz);
+    };
+    const int originalX = x;
+    const int originalZ = z;
+    while (firstUncoveredBlock(x, z) == 0)
     {
         x = rand.nextIntOffset(x, 8);
         z = rand.nextIntOffset(z, 8);
         if (++attempts == 10000)
+        {
+            x = originalX;
+            z = originalZ;
             break;
+        }
     }
 
     worldInfo->setSpawnY(platformFindTopSpawnBlockY(this, x, z));

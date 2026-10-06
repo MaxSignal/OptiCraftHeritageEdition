@@ -15,6 +15,10 @@
 //                         <frame> tap <KEY>      press for two frames
 //                         <frame> shot <name>    write <name>.ppm
 //                         <frame> quit
+//                         <frame> kill           kill the player (respawn tests)
+//                         <frame> pos            log the player's position, whether it
+//                                                is on the ground, and whether the
+//                                                chunks it needs to be updated exist
 //   NSPIRE_SIM_MAX_FRAMES  hard stop (default 100000).
 //   NSPIRE_SIM_FRAME_MS    virtual clock: every clock in the process (std::chrono,
 //                       gettimeofday, micros) advances this many milliseconds per
@@ -31,6 +35,10 @@
 
 #include "nspire/NspireSystem.h"
 #include "nspire/input/NspireKeys.h"
+#include "client/Minecraft.h"
+#include "net/minecraft/src/DamageSource.h"
+#include "net/minecraft/src/EntityPlayerSP.h"
+#include "net/minecraft/src/World.h"
 
 #include <algorithm>
 #include <chrono>
@@ -183,6 +191,27 @@ void runScript()
         }
         else if (ev.command == "quit")
             g_exit = true;
+        else if (ev.command == "kill" || ev.command == "pos")
+        {
+            Minecraft* mc = Minecraft::getMinecraft();
+            EntityPlayerSP* player = mc != nullptr ? mc->thePlayer : nullptr;
+            if (player == nullptr || mc->theWorld == nullptr)
+                std::fprintf(stderr, "[sim] frame %ld %s: no player\n", g_frame, ev.command.c_str());
+            else if (ev.command == "kill")
+            {
+                player->attackEntityFrom(DamageSource::outOfWorld, 1000);
+                std::fprintf(stderr, "[sim] frame %ld kill\n", g_frame);
+            }
+            else
+            {
+                const int x = static_cast<int>(player->posX), z = static_cast<int>(player->posZ);
+                std::fprintf(stderr, "[sim] frame %ld pos %.2f %.2f %.2f ground=%d health=%d chunksNear=%d here=%d\n",
+                             g_frame, player->posX, player->posY, player->posZ, player->onGround ? 1 : 0,
+                             static_cast<int>(player->health),
+                             mc->theWorld->checkChunksExist(x - 16, 0, z - 16, x + 16, 128, z + 16) ? 1 : 0,
+                             mc->theWorld->chunkExists(x >> 4, z >> 4) ? 1 : 0);
+            }
+        }
     }
 }
 } // namespace
