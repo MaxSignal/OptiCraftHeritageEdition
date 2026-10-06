@@ -37,6 +37,14 @@
 #ifndef NSPIRE_USE_HEIGHTMAP_TERRAIN
 #define NSPIRE_USE_HEIGHTMAP_TERRAIN                 1
 #endif
+// View distance on the calculator: the fog closes at this many blocks (from
+// the one-chunk render distance's 16), and the terrain backend leaves out every
+// quad and section entirely behind it (RenderAPI_NGL.cpp, drawStoredMesh). The
+// area drawn goes with its square: 12 is a bit over half of 16.
+#ifndef NSPIRE_FOG_END_BLOCKS
+#define NSPIRE_FOG_END_BLOCKS                        12.0f
+#endif
+
 #undef  PLATFORM_USE_HEIGHTMAP_TERRAIN
 #define PLATFORM_USE_HEIGHTMAP_TERRAIN            NSPIRE_USE_HEIGHTMAP_TERRAIN
 

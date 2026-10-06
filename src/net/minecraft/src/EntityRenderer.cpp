@@ -3074,6 +3074,15 @@ void EntityRenderer::setupFog(int fogMode, float partialTicks)
         }
 #endif
 
+#if PLATFORM_NSPIRE
+        // A shorter view (NSPIRE_FOG_END_BLOCKS); the terrain backend skips what
+        // the fog has fully covered, so this is also less to draw.
+        if (fogMode >= 0 && fogEnd > NSPIRE_FOG_END_BLOCKS)
+        {
+            fogEnd = NSPIRE_FOG_END_BLOCKS;
+            fogStart = fogEnd * 0.6f;
+        }
+#endif
         renderFogf(RenderFogParameter::Start, fogStart);
         renderFogf(RenderFogParameter::End, fogEnd);
         renderTerrainSetFog(RenderFogMode::Linear, 1.0f, fogStart, fogEnd,

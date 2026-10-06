@@ -184,6 +184,15 @@ bool g_guiDepthStale = false;
 
 // Drawing a terrain section (drawStoredMesh): every quad samples one atlas tile.
 bool g_terrainDraw = false;
+// The face groups drawStoredMesh hands drawTerrainQuads, in quads from the
+// start of the mesh, each walked from its nearest face (reverse: last first).
+struct TerrainRun
+{
+    int first, count;
+    bool reverse;
+};
+TerrainRun g_terrainRuns[6];
+int g_terrainRunCount = 0;
 // Eye depth (clip w, Q12) beyond which terrain faces are drawn flat (drawTriangle).
 constexpr std::int32_t kFlatTerrainW = 7 << 12;
 
@@ -1406,20 +1415,24 @@ bool drawTerrainQuads(const DrawSetup& setup, const RenderInterleavedMesh& mesh,
         }
     };
 
+    // Linear fog is complete at its end distance; a quad wholly behind it would
+    // only paint fog colour over the fog-coloured clear.
+    const bool fogCull = setup.fog && setup.fogMode == RenderFogMode::Linear && setup.fogSpanValid;
+    const std::int32_t fogFar = setup.fogEnd;
     const int stride = mesh.stride;
     const int n = mesh.count & ~3;
     ClipVertex v[4];
-    for (int i = 0; i < n; i += 4)
-    {
+    const auto drawQuad = [&](int i) {
         const std::uint8_t* p = base + static_cast<std::size_t>(i) * stride;
         vertex(p, v[0]);
         vertex(p + stride, v[1]);
         vertex(p + 2 * stride, v[2]);
         vertex(p + 3 * stride, v[3]);
-        if ((v[0].outcode & v[1].outcode & v[2].outcode & v[3].outcode) != 0)
+        if ((v[0].outcode & v[1].outcode & v[2].outcode & v[3].outcode) != 0 ||
+            (fogCull && v[0].w >= fogFar && v[1].w >= fogFar && v[2].w >= fogFar && v[3].w >= fogFar))
         {
-            g_stats.trianglesSubmitted += 2; // both outside one plane: no projection
-            continue;
+            g_stats.trianglesSubmitted += 2; // outside one plane, or wholly in the fog: not drawn
+            return;
         }
         int r, g, b, a;
         litColour(p, r, g, b, a);
@@ -1434,14 +1447,30 @@ bool drawTerrainQuads(const DrawSetup& setup, const RenderInterleavedMesh& mesh,
         if (!shade.visible)
         {
             g_stats.trianglesSubmitted += 2;
-            continue;
+            return;
         }
         for (ClipVertex& c : v)
             if (c.outcode == 0)
                 c.screen = project(setup, c);
         rasterTriangle(setup, shade, v[0], v[1], v[2]);
         rasterTriangle(setup, shade, v[0], v[2], v[3]);
+    };
+    if (g_terrainRunCount > 0)
+    {
+        for (int r = 0; r < g_terrainRunCount; ++r)
+        {
+            const TerrainRun& run = g_terrainRuns[r];
+            if (run.reverse)
+                for (int q = run.first + run.count - 1; q >= run.first; --q)
+                    drawQuad(q * 4);
+            else
+                for (int q = run.first; q < run.first + run.count; ++q)
+                    drawQuad(q * 4);
+        }
     }
+    else
+        for (int i = 0; i < n; i += 4)
+            drawQuad(i);
     return true;
 }
 
@@ -1642,6 +1671,23 @@ bool drawStoredMesh(const StoredMesh& stored)
         return false;
 
     const std::int32_t eye[3] = {g_eye[0] - stored.origin[0], g_eye[1] - stored.origin[1], g_eye[2] - stored.origin[2]};
+    if (stored.hasGroups && g_eyeValid && g_state.fog && g_state.fogMode == RenderFogMode::Linear)
+    {
+        // A section wholly behind the fog would only draw fog colour over the
+        // fog-coloured clear. The fog is planar (eye depth), the test radial,
+        // so allow for the frustum's corners.
+        const std::int64_t reach = static_cast<std::int64_t>(NglFixed::fromFloat(g_state.fogEnd, 8)) * 5 / 4; // Q8
+        const auto gap = [](std::int32_t e) -> std::int64_t {
+            constexpr std::int32_t kSection = 16 << 8;
+            return e < 0 ? -e : (e > kSection ? e - kSection : 0);
+        };
+        const std::int64_t gx = gap(eye[0]), gy = gap(eye[1]), gz = gap(eye[2]);
+        if (gx * gx + gy * gy + gz * gz > reach * reach)
+        {
+            g_stats.trianglesSkipped += static_cast<unsigned long>(stored.mesh.vertexCount / 2);
+            return true;
+        }
+    }
     RenderInterleavedMesh view;
     view.data = stored.mesh.raw.data();
     view.stride = stored.mesh.stride;
@@ -1673,19 +1719,13 @@ bool drawStoredMesh(const StoredMesh& stored)
         TerrainScope() { g_terrainDraw = true; }
         ~TerrainScope() { g_terrainDraw = false; }
     } terrainScope;
+    // One draw for all the axis groups that face the eye, each group walked
+    // front to back (sortGroupByPlane): +axis faces are seen from above their
+    // planes, so the nearest is the highest plane, and -axis faces the reverse.
     int quad = 0;
-    int runStart = -1;
     bool drew = false;
-    const auto flush = [&](int end) {
-        if (runStart >= 0 && end > runStart)
-        {
-            view.first = runStart * 4;
-            view.count = (end - runStart) * 4;
-            drew |= drawMeshNow(view, true);
-        }
-        runStart = -1;
-    };
     constexpr int kOtherGroup = RenderTerrainFaceGroups::kGroupCount - 1;
+    g_terrainRunCount = 0;
     for (int g = 0; g < kOtherGroup; ++g)
     {
         const int count = stored.groupQuads[g];
@@ -1695,18 +1735,18 @@ bool drawStoredMesh(const StoredMesh& stored)
         const bool visible = (g & 1) == 0 ? eye[axis] + kFaceCullMargin > stored.planeMin[g]
                                           : eye[axis] - kFaceCullMargin < stored.planeMax[g];
         if (visible)
-        {
-            if (runStart < 0)
-                runStart = quad;
-        }
+            g_terrainRuns[g_terrainRunCount++] = {quad, count, (g & 1) == 0};
         else
-        {
             g_stats.trianglesSkipped += static_cast<unsigned long>(count) * 2u;
-            flush(quad);
-        }
         quad += count;
     }
-    flush(quad);
+    if (g_terrainRunCount > 0)
+    {
+        view.first = 0;
+        view.count = quad * 4;
+        drew |= drawMeshNow(view, true);
+        g_terrainRunCount = 0;
+    }
     if (const int count = stored.groupQuads[kOtherGroup])
     {
         // Diagonal faces, i.e. mostly plants: the terrain build gives them one
@@ -1953,6 +1993,24 @@ int mergeGroup(const std::int32_t* src, int quads, int axis, std::vector<std::in
     return emitted;
 }
 
+// Orders an axis group's quads by their plane, ascending, so drawStoredMesh
+// can draw each group front to back from wherever the eye is: up close a face
+// covers the whole low-resolution frame, and a nearer face drawn first turns
+// the ones behind it into depth-test rejects instead of a second full fill.
+void sortGroupByPlane(std::vector<std::int32_t>& quads, std::size_t start, int count, int axis)
+{
+    std::vector<std::pair<std::int32_t, int>> order(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i)
+        order[static_cast<std::size_t>(i)] = {rawPos(&quads[start + static_cast<std::size_t>(i) * 32], axis), i};
+    std::stable_sort(order.begin(), order.end(),
+                     [](const std::pair<std::int32_t, int>& a, const std::pair<std::int32_t, int>& b) { return a.first < b.first; });
+    std::vector<std::int32_t> sorted(static_cast<std::size_t>(count) * 32);
+    for (int i = 0; i < count; ++i)
+        std::copy_n(&quads[start + static_cast<std::size_t>(order[static_cast<std::size_t>(i)].second) * 32], 32,
+                    &sorted[static_cast<std::size_t>(i) * 32]);
+    std::copy(sorted.begin(), sorted.end(), quads.begin() + static_cast<std::ptrdiff_t>(start));
+}
+
 // Rewrites a grouped terrain mesh (still float) with merged faces.
 void mergeStoredFaces(StoredMesh& stored)
 {
@@ -1966,6 +2024,7 @@ void mergeStoredFaces(StoredMesh& stored)
         const int quads = stored.groupQuads[g];
         const std::int32_t* src = mesh.raw.data() + static_cast<std::size_t>(quadStart) * 32;
         int emitted;
+        const std::size_t outStart = out.size();
         if (g < 6 && quads > 1)
             emitted = mergeGroup(src, quads, g >> 1, out);
         else
@@ -1973,6 +2032,8 @@ void mergeStoredFaces(StoredMesh& stored)
             out.insert(out.end(), src, src + static_cast<std::size_t>(quads) * 32);
             emitted = quads;
         }
+        if (g < 6 && emitted > 1)
+            sortGroupByPlane(out, outStart, emitted, g >> 1);
         quadStart += quads;
         stored.groupQuads[g] = emitted;
         total += emitted;
@@ -2116,19 +2177,22 @@ void endWorldPass()
     constexpr int kW = NspireSystem::kScreenWidth;
     const COLOR* src = g_lowResBuffer.data();
     COLOR* dst = NspireSystem::backBuffer();
+    static_assert(kWorldScale == 3 && kWorldW * 3 == kW + 1, "the row loop below writes 106 source pixels in pairs plus one");
     for (int y = 0; y < kWorldH; ++y)
     {
         const COLOR* row = src + y * kW;
         COLOR* out = dst + kWorldScale * y * kW;
-        for (int x = 0; x < kW; x += kWorldScale)
+        // Two source pixels are six output pixels: three 32-bit stores.
+        std::uint32_t* o = reinterpret_cast<std::uint32_t*>(out);
+        for (int x = 0; x + 1 < kWorldW - 1; x += 2, o += 3)
         {
-            const COLOR c = row[x / kWorldScale];
-            out[x] = c;
-            if (x + 1 < kW)
-                out[x + 1] = c;
-            if (x + 2 < kW)
-                out[x + 2] = c;
+            const std::uint32_t c0 = row[x], c1 = row[x + 1];
+            o[0] = c0 | c0 << 16;
+            o[1] = c0 | c1 << 16;
+            o[2] = c1 | c1 << 16;
         }
+        const std::uint32_t last = row[kWorldW - 1];
+        o[0] = last | last << 16; // the 107th pixel's first two columns end the row
         for (int k = 1; k < kWorldScale; ++k)
             std::memcpy(out + k * kW, out, kW * sizeof(COLOR));
     }
