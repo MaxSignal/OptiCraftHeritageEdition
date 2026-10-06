@@ -2,6 +2,9 @@
 #include "GuiMainMenu.h"
 #include "platform/Log.h"
 #include "platform/PlatformConfig.h"
+#if PLATFORM_NSPIRE
+#include "nspire_build_stamp.h"
+#endif
 #include "java/String.h"
 #include "java/BufferedImage.h"
 #include "GuiButton.h"
@@ -613,6 +616,10 @@ void GuiMainMenu::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
         syncLegacySelection();
         drawLegacyMenuHints(mc, width, height, false);
     }
+#if PLATFORM_NSPIRE
+    // Which program is running; see cmake/nspire_build_stamp.cmake.
+    drawString(fontRenderer, NSPIRE_BUILD_STAMP, 2, 2, 0x909090);
+#endif
 
     GuiScreen::drawScreen(mouseX, mouseY, partialTick);
 }

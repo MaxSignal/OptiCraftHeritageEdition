@@ -77,6 +77,17 @@ public:
 	std::vector<Chunk *> getLoadedChunksSnapshot() const override { return chunkList; }
 	void    removeEntityFromLoadedChunks(Entity *entity) override;
 
+	// Pregeneration (Minecraft::pregenerateDimension). The caller sets
+	// World::findingSpawnPoint so requests bypass the cache-radius gate and the
+	// per-tick generation throttle.
+	// Loads or generates (i, j) synchronously; false if it came back blank.
+	bool pregenerateChunk(int_t i, int_t j);
+	// Decorates (i, j) now if it is loaded, undecorated, and its +x/+z
+	// neighbours are loaded.
+	void pregeneratePopulate(int_t i, int_t j);
+	// Writes (i, j) to disk regardless of the runtime-edit rule, then frees it.
+	void pregenerateSaveAndUnload(int_t i, int_t j);
+
 private:
 	static std::uint64_t chunkKey(int_t i, int_t j);
 

@@ -173,6 +173,105 @@ jobs:
         if: always()
         run: ccache --show-stats
 
+  # ── TI-Nspire (Ndless) ────────────────────────────────────────────────
+  # Two programs: opticraft.tns writes the opticraft_log.txt.tns diagnostics,
+  # opticraft-release.tns (NSPIRE_DEBUG_LOG=OFF) writes no log.
+  build-nspire:
+    timeout-minutes: 45
+    name: TI-Nspire
+    runs-on: ubuntu-26.04
+    env:
+      NDLESS_SDK: /opt/ndless-sdk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Install build tools
+        # boost/zlib headers are only for rebuilding genzehn (see below).
+        run: sudo apt update && sudo apt install -y ccache libboost-program-options-dev zlib1g-dev
+
+      - name: Cache ccache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: ccache-nspire-${{ github.run_id }}
+          restore-keys: |
+            ccache-nspire-
+
+      - name: Configure ccache
+        run: ccache --max-size=2G && ccache --set-config=compression=true
+
+      - name: Prepare Ndless SDK directory permissions
+        run: |
+          sudo mkdir -p /opt/ndless-sdk
+          sudo chown -R $USER:$USER /opt/ndless-sdk
+
+      - name: Cache Ndless SDK
+        id: cache-ndless
+        uses: actions/cache@v6
+        with:
+          path: /opt/ndless-sdk
+          key: cache-ndless-sdk-2026-10-06
+
+      - name: Install Ndless SDK
+        # Prebuilt arm-none-eabi GCC + newlib + libndls + genzehn/make-prg, the
+        # same archive others/opticraft_nspire/setup_toolchain.sh installs.
+        if: steps.cache-ndless.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://github.com/MaxSignal/build-toolchain/releases/download/latest/ndless-sdk.tar.gz -O /tmp/ndless-sdk.tar.gz
+          tar -xzf /tmp/ndless-sdk.tar.gz -C /opt
+          rm /tmp/ndless-sdk.tar.gz
+
+      - name: Make genzehn runnable
+        # The prebuilt genzehn links the boost of the machine that built the
+        # SDK. Rebuild it from Ndless' source against this runner's boost when
+        # it cannot start.
+        run: |
+          if ! "$NDLESS_SDK/bin/genzehn" --help > /dev/null 2>&1; then
+            git clone --depth 1 https://github.com/ndless-nspire/Ndless.git /tmp/Ndless
+            GZ=/tmp/Ndless/ndless-sdk/tools/genzehn
+            g++ -O2 -std=c++11 -I "$GZ/elfio-3.2" "$GZ/genzehn.cpp" \
+              -lboost_program_options -lz -o "$NDLESS_SDK/bin/genzehn"
+          fi
+          "$NDLESS_SDK/bin/genzehn" --help > /dev/null
+
+      - name: Configure
+        run: |
+          for variant in debuglog:ON release:OFF; do
+            cmake -B "build/nspire-${variant%%:*}" -G "Unix Makefiles" \
+              -DCMAKE_TOOLCHAIN_FILE=cmake/nspire_toolchain.cmake \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DPLATFORM=NSPIRE \
+              -DNDLESS_SDK="$NDLESS_SDK" \
+              -DNSPIRE_DEBUG_LOG=${variant##*:} \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          done
+
+      - name: Build
+        run: |
+          cmake --build build/nspire-debuglog --parallel
+          cmake --build build/nspire-release --parallel
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp bin/nspire/opticraft.tns bin/nspire/opticraft-release.tns dist/
+          tar -C dist -czf OptiCraft-nspire.tar.gz .
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: opticraft-nspire
+          path: OptiCraft-nspire.tar.gz
+          if-no-files-found: error
+
+      - name: ccache stats
+        if: always()
+        run: ccache --show-stats
+
   # ── Windows x64 GCC (MinGW) ──────────────────────────────────────────
   build-windows-x64-gcc:
     timeout-minutes: 45

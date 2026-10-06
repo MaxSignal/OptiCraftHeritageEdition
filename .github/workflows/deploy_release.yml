@@ -24,6 +24,9 @@ jobs:
           - platform: Nintendo Wii
             artifact: opticraft-wii
             file: OptiCraft-wii.tar.gz
+          - platform: TI-Nspire
+            artifact: opticraft-nspire
+            file: OptiCraft-nspire.tar.gz
           - platform: Windows x64 GCC
             artifact: opticraft-windows-x64-gcc
             file: OptiCraft-windows-x64-gcc.tar.gz

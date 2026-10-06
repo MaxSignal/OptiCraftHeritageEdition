@@ -12,11 +12,12 @@
 #include "java/String.h"
 #include "nspire/NspireSystem.h"
 #include "nspire/render/NglBackend.h"
+#include "nspire_build_stamp.h"
 
 int main(int argc, char** argv)
 {
 	NspireSystem::initialize(argc, argv);
-	NspireSystem::log("OptiCraft Heritage for TI-Nspire, built " __DATE__ " " __TIME__ "\n");
+	NspireSystem::log("OptiCraft Heritage for TI-Nspire, built " NSPIRE_BUILD_STAMP "\n");
 
 	try
 	{

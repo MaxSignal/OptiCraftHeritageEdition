@@ -71,8 +71,14 @@ float MathHelper::sqrt_double(double d)
 
 int_t MathHelper::floor_float(float f)
 {
+#if PLATFORM_INTEGER_FLOOR_DOUBLE
+	// Same value without the soft-float compare and conversions; see
+	// platformIntegerFloorFloat. Cave carving and ore veins call this per voxel.
+	return platformIntegerFloorFloat(f);
+#else
 	int_t i = JavaArithmetic::floatToInt(f);
 	return f < (float)i ? JavaArithmetic::intSub(i, 1) : i;
+#endif
 }
 
 int_t MathHelper::func_40346_b(double d)

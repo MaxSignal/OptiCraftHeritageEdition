@@ -75,6 +75,10 @@ public:
 	int_t getLimitedWorldMinChunk() const;
 	int_t getLimitedWorldMaxChunk() const;
 	double getLimitedWorldBoundary() const;
+	// Bit (dimension + 1) is set once Minecraft::pregenerateDimension has
+	// written that dimension's area to disk (0 = Nether, 1 = Overworld, 2 = End).
+	bool isDimensionPregenerated(int_t dimensionId) const;
+	void setDimensionPregenerated(int_t dimensionId);
 
 private:
 	long_t randomSeed;
@@ -99,4 +103,5 @@ private:
 	int_t thunderTime;
 	bool limitedWorld;
 	int_t worldSizeType;
+	int_t pregeneratedDimensions;
 };

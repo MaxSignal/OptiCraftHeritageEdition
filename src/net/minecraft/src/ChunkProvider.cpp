@@ -1073,6 +1073,41 @@ void ChunkProvider::unloadChunk(std::uint64_t key, Chunk *chunk)
 	delete chunk;
 }
 
+bool ChunkProvider::pregenerateChunk(int_t i, int_t j)
+{
+	Chunk *chunk = prepareChunk(i, j);
+	return chunk != nullptr && chunk != blankChunk;
+}
+
+void ChunkProvider::pregeneratePopulate(int_t i, int_t j)
+{
+	auto it = chunkMap.find(chunkKey(i, j));
+	if (it == chunkMap.end() || it->second == nullptr || it->second == blankChunk || it->second->isTerrainPopulated)
+		return;
+	const int_t eastX = JavaArithmetic::intAdd(i, 1);
+	const int_t southZ = JavaArithmetic::intAdd(j, 1);
+	if (chunkExists(eastX, j) && chunkExists(i, southZ) && chunkExists(eastX, southZ))
+		populate(this, i, j);
+}
+
+void ChunkProvider::pregenerateSaveAndUnload(int_t i, int_t j)
+{
+	const std::uint64_t key = chunkKey(i, j);
+	auto it = chunkMap.find(key);
+	if (it == chunkMap.end())
+		return;
+	Chunk *chunk = it->second;
+	if (chunk != nullptr && chunk != blankChunk)
+		chunk->markRuntimeSaveRequired();
+	unloadChunk(key, chunk);
+	chunkMap.erase(it);
+	markChunkTopologyChanged();
+	chunkList.erase(std::remove(chunkList.begin(), chunkList.end(), chunk), chunkList.end());
+#if PLATFORM_DEFERRED_POPULATE
+	populateQueued.erase(key);
+#endif
+}
+
 bool ChunkProvider::isChunkPopulationPending(int_t i, int_t j) const
 {
 #if PLATFORM_DEFERRED_POPULATE

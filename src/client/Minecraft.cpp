@@ -2884,6 +2884,97 @@ void Minecraft::convertMapFormat(const std::string &s, const std::string &s1)
     startWorld(s, s1, static_cast<long_t>(0));
 }
 
+#if PLATFORM_PREGENERATE_RADIUS_CHUNKS > 0
+// One-time pregeneration of a square of chunk columns around where the player
+// enters a dimension. Each column is generated, decorated, lit and written to
+// disk on the loading screen, so walking around the area later loads saved
+// chunks instead of generating them -- generation was a third of the frame time
+// while exploring on the calculator. It runs the first time each dimension is
+// entered and is recorded in level.dat (WorldInfo::isDimensionPregenerated): the
+// Overworld on world creation (or the first load of an older world), the Nether
+// and the End on the first portal trip.
+//
+// Columns are processed in x order and freed two columns behind the front, so
+// at most three columns are resident whatever the radius: decorating (x-1, z-1)
+// needs (x, z), and its lighting can still spill one column back.
+void Minecraft::pregenerateDimension(int_t centerChunkX, int_t centerChunkZ)
+{
+    if (theWorld == nullptr || theWorld->worldProvider == nullptr || theWorld->multiplayerWorld)
+        return;
+    WorldInfo *info = theWorld->getWorldInfo();
+    ChunkProvider *provider = dynamic_cast<ChunkProvider *>(theWorld->getIChunkProvider());
+    const int_t dimension = theWorld->worldProvider->worldType;
+    if (info == nullptr || provider == nullptr || info->isDimensionPregenerated(dimension))
+        return;
+
+    const int_t radius = PLATFORM_PREGENERATE_RADIUS_CHUNKS;
+    // One extra column and row on +x/+z: decorating a chunk needs its +x, +z
+    // and diagonal neighbours, so the far edge is generated but decorated by
+    // the game once the player walks up to it.
+    const int_t minX = centerChunkX - radius;
+    const int_t maxX = centerChunkX + radius + 1;
+    const int_t minZ = centerChunkZ - radius;
+    const int_t maxZ = centerChunkZ + radius + 1;
+    const int_t total = (maxX - minX + 1) * (maxZ - minZ + 1);
+
+    loadingScreen->printText("Preparing the area (first visit only)");
+    loadingScreen->displayLoadingString("Generating terrain");
+    platformMemoryCheckpoint("pregenerate begin");
+    const bool previousFindingSpawnPoint = theWorld->findingSpawnPoint;
+    theWorld->findingSpawnPoint = true;
+    const std::uint64_t startUs = PlatformCompat::getMonotonicMicros();
+
+    int_t done = 0;
+    int_t shownPercent = -1;
+    auto freeColumn = [&](int_t x)
+    {
+        for (int_t z = minZ; z <= maxZ; ++z)
+            provider->pregenerateSaveAndUnload(x, z);
+    };
+    for (int_t x = minX; x <= maxX; ++x)
+    {
+        for (int_t z = minZ; z <= maxZ; ++z)
+        {
+            // A progress redraw costs about as much as generating a chunk on
+            // the calculator; draw only when the percentage moves.
+            const int_t percent = (done++ * 100) / total;
+            if (percent != shownPercent)
+            {
+                shownPercent = percent;
+                loadingScreen->setLoadingProgress(percent);
+            }
+            provider->pregenerateChunk(x, z);
+            provider->pregeneratePopulate(x - 1, z - 1);
+            while (theWorld->updatingLighting()) {}
+        }
+        if (x - 2 >= minX)
+            freeColumn(x - 2);
+    }
+    for (int_t x = maxX - 1 >= minX ? maxX - 1 : minX; x <= maxX; ++x)
+        freeColumn(x);
+
+    theWorld->findingSpawnPoint = previousFindingSpawnPoint;
+    info->setDimensionPregenerated(dimension);
+    if (ISaveHandler *saveHandler = theWorld->getSaveHandler())
+    {
+        // With the current player, when there is one: saveWorldInfo() alone
+        // writes the player tag read at load time, which after a portal trip
+        // is older than the level.dat the world change has just saved.
+        if (thePlayer != nullptr)
+            saveHandler->saveWorldInfoAndPlayer(info, std::vector<EntityPlayer *>{thePlayer});
+        else
+            saveHandler->saveWorldInfo(info);
+    }
+    platformMemoryCheckpoint("pregenerate end");
+#if PLATFORM_NSPIRE
+    NspireSystem::log("[pregen] dimension %d: %d chunks in %lu ms\n", (int)dimension, (int)total,
+                      static_cast<unsigned long>((PlatformCompat::getMonotonicMicros() - startUs) / 1000u));
+#else
+    (void)startUs;
+#endif
+}
+#endif
+
 void Minecraft::preloadWorld(const std::string &s)
 {
     loadingScreen->printText(s);
@@ -2926,6 +3017,15 @@ void Minecraft::preloadWorld(const std::string &s)
         chunkcoordinates.z = (int_t)thePlayer->posZ;
     }
 
+#if PLATFORM_PREGENERATE_RADIUS_CHUNKS > 0
+    {
+        // The End's island is centred on the origin, not on the arrival platform.
+        const bool end = theWorld->worldProvider != nullptr && theWorld->worldProvider->worldType == 1;
+        pregenerateDimension(end ? 0 : (chunkcoordinates.x >> 4), end ? 0 : (chunkcoordinates.z >> 4));
+        loadingScreen->printText(s);
+        loadingScreen->displayLoadingString("Building terrain");
+    }
+#endif
     configureChunkProviderCache(ichunkprovider, chunkcoordinates.x >> 4, chunkcoordinates.z >> 4, gameSettings->renderDistance);
 
 #if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_NSPIRE || PLATFORM_PC_LEGACY

@@ -232,6 +232,9 @@ private:
     void forceReload();
     void convertMapFormat(const std::string &s, const std::string &s1);
     void preloadWorld(const std::string &s);
+#if PLATFORM_PREGENERATE_RADIUS_CHUNKS > 0
+    void pregenerateDimension(int_t centerChunkX, int_t centerChunkZ);
+#endif
     void resize(int_t i, int_t j);
 
     static File *getAppDir(const std::string &s);

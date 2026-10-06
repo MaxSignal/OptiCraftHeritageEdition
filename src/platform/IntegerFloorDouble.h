@@ -2,6 +2,7 @@
 
 #include "java/Type.h"
 
+#include <cstdint>
 #include <cstring>
 
 // floor(double) -> int, computed from the IEEE-754 fields with integer
@@ -62,4 +63,49 @@ inline int_t platformIntegerFloorDouble(double d)
 		return truncated;
 	const bool hasFraction = (mantissa & ((1ull << shift) - 1ull)) != 0;
 	return hasFraction ? -truncated - 1 : -truncated;
+}
+
+// floor(float) -> int with integer arithmetic; the single-precision twin of the
+// function above. Returns exactly what MathHelper::floor_float's expression
+//
+//     int_t i = JavaArithmetic::floatToInt(f);
+//     return f < (float)i ? JavaArithmetic::intSub(i, 1) : i;
+//
+// returns, for all 2^32 inputs (checked exhaustively against that expression).
+//
+// Layout: bit 31 sign, bits 30-23 biased exponent, bits 22-0 mantissa.
+inline int_t platformIntegerFloorFloat(float f)
+{
+	std::uint32_t bits;
+	std::memcpy(&bits, &f, sizeof(bits));
+	const int_t exponent = (int_t)((bits >> 23) & 0xFFu) - 127;
+	const bool negative = (bits >> 31) != 0;
+
+	// |f| < 1, denormals included; -0.0 floors to 0.
+	if (exponent < 0)
+		return (negative && (bits << 1) != 0) ? -1 : 0;
+
+	if (exponent >= 31)
+	{
+		if (exponent == 128 && (bits & 0x7FFFFFu) != 0)
+			return 0;
+		if (!negative)
+			return 2147483647;
+		if (bits == 0xCF000000u)
+			return -2147483647 - 1;
+		// Saturated INT_MIN minus one wraps, as in Java (see the double version).
+		return 2147483647;
+	}
+
+	const std::uint32_t mantissa = (bits & 0x7FFFFFu) | 0x800000u;
+	if (exponent >= 23)
+	{
+		const int_t whole = (int_t)(mantissa << (exponent - 23));
+		return negative ? -whole : whole;
+	}
+	const int_t shift = 23 - exponent;
+	const int_t truncated = (int_t)(mantissa >> shift);
+	if (!negative)
+		return truncated;
+	return (mantissa & ((1u << shift) - 1u)) != 0 ? -truncated - 1 : -truncated;
 }

@@ -251,6 +251,12 @@ long heapFreeKb()
 
 void log(const char* fmt, ...)
 {
+#if !NSPIRE_DEBUG_LOG
+    // Release program (cmake -DNSPIRE_DEBUG_LOG=OFF): no log file at all.
+    // fatal() still reports through the OS message box.
+    (void)fmt;
+    return;
+#endif
     // The OS commits a file to flash only when it is closed, so a hang loses
     // anything still open. Reopen and close per line: the log is a few lines
     // every few seconds, and the last ones are the ones that matter.

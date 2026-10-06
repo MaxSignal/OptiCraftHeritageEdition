@@ -23,6 +23,17 @@ include(${CMAKE_SOURCE_DIR}/cmake/SourceSelection.cmake)
 
 set(MC_LOG_LEVEL "0" CACHE STRING "Unified diagnostic verbosity: 0=off, 1=info, 2=debug, 3=trace")
 
+# opticraft_log.txt.tns next to the program: frame statistics every few seconds,
+# memory checkpoints and other diagnostics, each line opened, appended and closed
+# on the calculator's flash. OFF builds the release program, which writes no log
+# file (opticraft-release.tns, so both can sit in one folder).
+option(NSPIRE_DEBUG_LOG "Write the opticraft_log.txt.tns diagnostics log" ON)
+if(NSPIRE_DEBUG_LOG)
+    set(NSPIRE_PROGRAM_NAME "opticraft")
+else()
+    set(NSPIRE_PROGRAM_NAME "opticraft-release")
+endif()
+
 if(NSPIRE)
     set(NSPIRE_HOST_SIM OFF)
     message(STATUS "Nspire build: Ndless (calculator)")
@@ -84,7 +95,19 @@ target_compile_definitions(OptiCraft PRIVATE
     NO_NETWORK
     NO_SOUND
     MC_LOG_LEVEL=${MC_LOG_LEVEL}
+    NSPIRE_DEBUG_LOG=$<BOOL:${NSPIRE_DEBUG_LOG}>
 )
+
+# Build time in a generated header, rewritten on every build (not only when
+# CMake configures), so the title screen and the log name the program that is
+# actually running. Only the two files that include it recompile.
+add_custom_target(OptiCraftBuildStamp
+    COMMAND ${CMAKE_COMMAND} -DOUT=${CMAKE_BINARY_DIR}/generated/nspire_build_stamp.h
+            -DDEBUG_LOG=${NSPIRE_DEBUG_LOG} -P ${CMAKE_SOURCE_DIR}/cmake/nspire_build_stamp.cmake
+    BYPRODUCTS ${CMAKE_BINARY_DIR}/generated/nspire_build_stamp.h
+    VERBATIM
+)
+add_dependencies(OptiCraft OptiCraftBuildStamp)
 
 target_include_directories(OptiCraft PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
@@ -95,6 +118,7 @@ target_include_directories(OptiCraft PRIVATE
     "${CMAKE_SOURCE_DIR}/external/nGL"
     "${CMAKE_SOURCE_DIR}/external/stb"
     "${CMAKE_SOURCE_DIR}/external/zlib/contrib/minizip"
+    "${CMAKE_BINARY_DIR}/generated"
 )
 
 target_compile_options(OptiCraft PRIVATE
@@ -150,7 +174,7 @@ else()
     set(NSPIRE_BIN_DIR "${CMAKE_SOURCE_DIR}/bin/nspire")
     set_target_properties(OptiCraft PROPERTIES
         SUFFIX ".elf"
-        OUTPUT_NAME "opticraft"
+        OUTPUT_NAME "${NSPIRE_PROGRAM_NAME}"
         RUNTIME_OUTPUT_DIRECTORY "${NSPIRE_BIN_DIR}"
     )
 
@@ -159,13 +183,13 @@ else()
     find_program(NSPIRE_MAKE_PRG make-prg REQUIRED)
     add_custom_command(TARGET OptiCraft POST_BUILD
         COMMAND "${NSPIRE_GENZEHN}" --input "$<TARGET_FILE:OptiCraft>"
-                --output "${NSPIRE_BIN_DIR}/opticraft.zehn"
+                --output "${NSPIRE_BIN_DIR}/${NSPIRE_PROGRAM_NAME}.zehn"
                 --name "OptiCraft Heritage" --author "OptiJuegos (Nspire port)"
                 --notice "Minecraft Beta clone, nGL software renderer"
                 --version 173 --uses-lcd-blit true --240x320-support true --compress
-        COMMAND "${NSPIRE_MAKE_PRG}" "${NSPIRE_BIN_DIR}/opticraft.zehn" "${NSPIRE_BIN_DIR}/opticraft.tns"
-        COMMAND ${CMAKE_COMMAND} -E remove "${NSPIRE_BIN_DIR}/opticraft.zehn"
-        COMMENT "genzehn + make-prg: ${NSPIRE_BIN_DIR}/opticraft.tns"
+        COMMAND "${NSPIRE_MAKE_PRG}" "${NSPIRE_BIN_DIR}/${NSPIRE_PROGRAM_NAME}.zehn" "${NSPIRE_BIN_DIR}/${NSPIRE_PROGRAM_NAME}.tns"
+        COMMAND ${CMAKE_COMMAND} -E remove "${NSPIRE_BIN_DIR}/${NSPIRE_PROGRAM_NAME}.zehn"
+        COMMENT "genzehn + make-prg: ${NSPIRE_BIN_DIR}/${NSPIRE_PROGRAM_NAME}.tns"
         VERBATIM
     )
 endif()

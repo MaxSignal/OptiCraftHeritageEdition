@@ -511,3 +511,11 @@
 #  define PLATFORM_MP_MAX_CHANGES_PER_CHUNK              256u
 #  define PLATFORM_MP_MAX_DEFERRED_CHANGES               8192u
 #endif
+
+// Square of chunk columns, this many around the entry point, generated and
+// saved the first time each dimension is entered (Minecraft::pregenerateDimension).
+// 0 streams every chunk as the player walks, as vanilla does.
+#define PLATFORM_PREGENERATE_RADIUS_CHUNKS 0
+// Ore-vein voxel test in 1/256-block integers (WorldGenMinable::generate)
+// instead of per-voxel float arithmetic.
+#define PLATFORM_FIXED_ORE_VEINS 0

@@ -49,6 +49,7 @@ WorldInfo::WorldInfo(NBTTagCompound *nbttagcompound)
 		limitedWorld = nbttagcompound->hasKey("limitedWorld") ? nbttagcompound->getBoolean("limitedWorld") : false;
 		worldSizeType = limitedWorld ? 1 : 0;
 	}
+	pregeneratedDimensions = nbttagcompound->hasKey("PregenDims") ? nbttagcompound->getInteger("PregenDims") : 0;
 	playerTag = nullptr;
 	player2Tag = nullptr;
 	dimension = 0;
@@ -90,6 +91,7 @@ WorldInfo::WorldInfo(long_t l, const jstring &s)
 	thunderTime = 0;
 	limitedWorld = false;
 	worldSizeType = 0;
+	pregeneratedDimensions = 0;
 }
 
 WorldInfo::WorldInfo(WorldSettings *settings, const jstring &s)
@@ -102,6 +104,7 @@ WorldInfo::WorldInfo(WorldSettings *settings, const jstring &s)
 	hardcore = settings != nullptr && settings->getHardcoreEnabled();
 	worldSizeType = settings != nullptr ? settings->getWorldSizeType() : 0;
 	limitedWorld = (worldSizeType != 0);
+	pregeneratedDimensions = 0;
 	levelName = s;
 	spawnX = 0;
 	spawnY = 0;
@@ -128,6 +131,7 @@ WorldInfo::WorldInfo(WorldInfo *worldinfo)
 	hardcore = worldinfo->hardcore;
 	limitedWorld = worldinfo->limitedWorld;
 	worldSizeType = worldinfo->worldSizeType;
+	pregeneratedDimensions = worldinfo->pregeneratedDimensions;
 	spawnX = worldinfo->spawnX;
 	spawnY = worldinfo->spawnY;
 	spawnZ = worldinfo->spawnZ;
@@ -225,6 +229,8 @@ void WorldInfo::updateTagCompound(NBTTagCompound *nbttagcompound, NBTTagCompound
 	nbttagcompound->setBoolean("hardcore", hardcore);
 	nbttagcompound->setBoolean("limitedWorld", worldSizeType != 0);
 	nbttagcompound->setInteger("worldSizeType", worldSizeType);
+	if (pregeneratedDimensions != 0)
+		nbttagcompound->setInteger("PregenDims", pregeneratedDimensions);
 	if (nbttagcompound1 != nullptr)
 	{
 		if (nbttagcompound1 == playerTag)
@@ -329,6 +335,15 @@ int_t WorldInfo::getLimitedWorldMinChunk() const
 int_t WorldInfo::getLimitedWorldMaxChunk() const
 {
 	return worldSizeType == 2 ? 26 : 7;
+}
+bool WorldInfo::isDimensionPregenerated(int_t dimensionId) const
+{
+	return dimensionId >= -1 && dimensionId <= 1 && (pregeneratedDimensions & (1 << (dimensionId + 1))) != 0;
+}
+void WorldInfo::setDimensionPregenerated(int_t dimensionId)
+{
+	if (dimensionId >= -1 && dimensionId <= 1)
+		pregeneratedDimensions |= 1 << (dimensionId + 1);
 }
 double WorldInfo::getLimitedWorldBoundary() const
 {

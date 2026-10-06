@@ -85,7 +85,7 @@ bool WorldGenMinable::generate(World *world, Random &random, int_t i, int_t j, i
 		// divide from running ~4000 times per vein instead of once per step.
 		const gen_real_t r10 = d10 / GEN_R(2.0);
 		const gen_real_t r11 = d11 / GEN_R(2.0);
-#if PLATFORM_FLOAT_ORE_VEINS
+#if PLATFORM_FLOAT_ORE_VEINS && !PLATFORM_FIXED_ORE_VEINS
 		const gen_real_t inverseR10 = GEN_R(1.0) / r10;
 		const gen_real_t inverseR11 = GEN_R(1.0) / r11;
 #endif
@@ -95,6 +95,41 @@ bool WorldGenMinable::generate(World *world, Random &random, int_t i, int_t j, i
 		int_t l1 = GEN_FLOOR(d6 + r10);
 		int_t i2 = GEN_FLOOR(d7 + r11);
 		int_t j2 = GEN_FLOOR(d8 + r10);
+#if PLATFORM_FIXED_ORE_VEINS
+		// r10 == r11 (d10 and d11 are one value), so the ellipsoid is a sphere:
+		// a cell is inside when its centre's squared distance is below r10^2.
+		// The centre and radius are rounded to 1/256 block once per step and the
+		// voxel loops run in integers -- on a soft-float core they were most of
+		// a chunk's decoration time. Only cells within 1/256 block of the
+		// boundary can be decided differently from the float test.
+		{
+			const int_t centreX = JavaArithmetic::floatToInt(d6 * GEN_R(256.0) + GEN_R(0.5));
+			const int_t centreY = JavaArithmetic::floatToInt(d7 * GEN_R(256.0) + GEN_R(0.5));
+			const int_t centreZ = JavaArithmetic::floatToInt(d8 * GEN_R(256.0) + GEN_R(0.5));
+			const int_t radius = JavaArithmetic::floatToInt(r10 * GEN_R(256.0) + GEN_R(0.5));
+			const int_t radiusSq = radius * radius;
+			for (int_t k2 = i1; k2 <= l1; k2++)
+			{
+				const int_t dx = k2 * 256 + 128 - centreX;
+				const int_t sx = dx * dx;
+				if (sx >= radiusSq)
+					continue;
+				for (int_t l2 = j1; l2 <= i2; l2++)
+				{
+					const int_t dy = l2 * 256 + 128 - centreY;
+					const int_t sxy = sx + dy * dy;
+					if (sxy >= radiusSq)
+						continue;
+					for (int_t i3 = k1; i3 <= j2; i3++)
+					{
+						const int_t dz = i3 * 256 + 128 - centreZ;
+						if (sxy + dz * dz < radiusSq)
+							world->replaceBlockForPopulation(k2, l2, i3, stoneId, minableBlockId);
+					}
+				}
+			}
+		}
+#else
 		for (int_t k2 = i1; k2 <= l1; k2++)
 		{
 #if PLATFORM_FLOAT_ORE_VEINS
@@ -130,6 +165,7 @@ bool WorldGenMinable::generate(World *world, Random &random, int_t i, int_t j, i
 				}
 			}
 		}
+#endif
 	}
 	return true;
 }

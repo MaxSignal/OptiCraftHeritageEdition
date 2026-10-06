@@ -49,9 +49,11 @@ apps/OptiCraft/
 The TI-Nspire build targets the CX / CX II under Ndless. There is no GPU or FPU, so rendering is done in software through nGL (320x240, RGB565) and the game runs at a few frames per second at best. Sound and networking are disabled. The program and its data live side by side in any folder on the calculator:
 
 ```text
-opticraft.tns
+opticraft.tns            (or opticraft-release.tns, which writes no log)
 assets.pak.tns
 ```
+
+The first visit to each dimension generates and saves the area around the entry point on the loading screen (`PLATFORM_PREGENERATE_RADIUS_CHUNKS`), so walking inside it loads chunks instead of generating them.
 
 ## Source layout
 
@@ -135,7 +137,7 @@ cmake --preset nspire-release
 cmake --build --preset nspire-release
 ```
 
-The output is `bin/nspire/opticraft.tns`. `nspire-hostsim` builds the same port for the host as a headless simulator (frames are written as PPM, the keypad is driven from a script); see `src/nspire/NspireSystem_hostsim.cpp`.
+The output is `bin/nspire/opticraft.tns`, which writes a diagnostics log (`opticraft_log.txt.tns`) next to itself. Add `-DNSPIRE_DEBUG_LOG=OFF` to build `bin/nspire/opticraft-release.tns` instead, which writes no log. `nspire-hostsim` builds the same port for the host as a headless simulator (frames are written as PPM, the keypad is driven from a script); see `src/nspire/NspireSystem_hostsim.cpp`.
 
 ## Development notes
 

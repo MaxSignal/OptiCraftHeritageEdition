@@ -405,6 +405,18 @@
 // CHUNKS_PER_TICK 1 streams the rest. Both are starting points chosen from the
 // arithmetic, not from a measurement on hardware -- watch the world-tick time
 // once there are numbers and move them together.
+// Pregenerated area: 8 gives an 18 x 18 column square (288 blocks across)
+// around the spawn, the Nether arrival point and the End island, generated and
+// saved once on the loading screen. Inside it, walking loads saved chunks
+// instead of generating them; outside it the streaming generator below takes
+// over as before.
+#undef  PLATFORM_PREGENERATE_RADIUS_CHUNKS
+#define PLATFORM_PREGENERATE_RADIUS_CHUNKS       8
+// Ore veins were 36% of a generated chunk's device time (soft-float voxel
+// tests, ~70 million float operations per 324 chunks on the host profile).
+#undef  PLATFORM_FIXED_ORE_VEINS
+#define PLATFORM_FIXED_ORE_VEINS                 1
+
 #undef  PLATFORM_GENERATE_SYNC_RADIUS
 #define PLATFORM_GENERATE_SYNC_RADIUS            0
 #undef  PLATFORM_GENERATE_CHUNKS_PER_TICK
