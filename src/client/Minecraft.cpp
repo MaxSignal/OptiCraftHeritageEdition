@@ -2906,6 +2906,11 @@ void Minecraft::pregenerateDimension(int_t centerChunkX, int_t centerChunkZ)
     const int_t dimension = theWorld->worldProvider->worldType;
     if (info == nullptr || provider == nullptr || info->isDimensionPregenerated(dimension))
         return;
+    // A read-only world (the tutorial, opened in place from the pak) could not
+    // keep what was generated; it would only cost the wait on every visit.
+    ISaveHandler *readOnlyCheck = theWorld->getSaveHandler();
+    if (readOnlyCheck == nullptr || readOnlyCheck->isReadOnly())
+        return;
 
     const int_t radius = PLATFORM_PREGENERATE_RADIUS_CHUNKS;
     // One extra column and row on +x/+z: decorating a chunk needs its +x, +z
