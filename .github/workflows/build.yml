@@ -10,8 +10,10 @@ concurrency:
 on:
   # Branches are covered by pull_request below; restricting push to main
   # avoids running every job twice (push + PR) for the same commit.
+  # nspire-port is the TI-Nspire port's long-lived branch, built on every push
+  # without a pull request.
   push:
-    branches: [main]
+    branches: [main, nspire-port]
   pull_request:
   workflow_dispatch:
 
