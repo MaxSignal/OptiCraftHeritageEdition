@@ -5,9 +5,9 @@
 
 #include "GuiMultiplayer.h"
 #include "ServerNBTStorage.h"
+#include "platform/StdThread.h"
 #ifdef PS2_PLATFORM
 #include "java/System.h"
-#include "platform/StdThread.h"
 #endif
 
 void ThreadPollServers::start(const std::shared_ptr<ServerNBTStorage> &server)

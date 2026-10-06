@@ -262,9 +262,12 @@ jobs:
           done
 
       - name: Build
+        # A job count is required: with Unix Makefiles, --parallel alone is
+        # make -j without a limit, which starts every compile at once and ran
+        # the runner out of memory.
         run: |
-          cmake --build build/nspire-debuglog --parallel
-          cmake --build build/nspire-release --parallel
+          cmake --build build/nspire-debuglog --parallel "$(nproc)"
+          cmake --build build/nspire-release --parallel "$(nproc)"
 
       - name: Package
         run: |
