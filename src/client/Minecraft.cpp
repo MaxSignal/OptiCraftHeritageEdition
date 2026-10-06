@@ -8,6 +8,9 @@
 #include "platform/ConsoleAspectRatio.h"
 #include "platform/PlatformTuning.h"
 #include "platform/PlatformCompat.h"
+#if PLATFORM_NSPIRE
+#include "nspire/NspireSystem.h"
+#endif
 #include "platform/world/StreamingFrameBudget.h"
 #include "platform/ClientPlatformPolicy.h"
 #include "platform/Input.h"
@@ -1278,6 +1281,22 @@ void Minecraft::displayGuiScreen(GuiScreen *guiscreen)
 {
     if (dynamic_cast<GuiUnused *>(currentScreen) != nullptr)
         return;
+#if PLATFORM_NSPIRE
+    // A screen change that holds the frame for long (the old screen's close and
+    // the new one's init, which can read saves) goes into the device log.
+    struct ScreenChangeTimer
+    {
+        GuiScreen *&screen;
+        const std::uint64_t startUs = PlatformCompat::getMonotonicMicros();
+        ~ScreenChangeTimer()
+        {
+            const std::uint64_t ms = (PlatformCompat::getMonotonicMicros() - startUs) / 1000u;
+            if (ms >= 150)
+                NspireSystem::log("[gui] screen change to %s: %lu ms\n",
+                                  screen != nullptr ? typeid(*screen).name() : "(none)", static_cast<unsigned long>(ms));
+        }
+    } screenChangeTimer{guiscreen};
+#endif
     if (currentScreen != nullptr)
         currentScreen->onGuiClosed();
 #if PLATFORM_SYNC_STATS_ON_GUI_CHANGE

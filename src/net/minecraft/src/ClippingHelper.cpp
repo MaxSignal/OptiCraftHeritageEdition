@@ -16,10 +16,11 @@ ClippingHelper::ClippingHelper()
 // A box lies entirely behind a plane exactly when the corner that maximises the
 // plane equation is still behind it, so one selected corner replaces the eight
 // equivalent Java tests. Preserve Java's double arithmetic by default; the
-// low-CPU profile keeps the original PS2 single-precision shortcut.
+// low-CPU profile and the soft-float Nspire keep the original PS2
+// single-precision shortcut.
 bool ClippingHelper::isBoxInFrustum(double d, double d1, double d2, double d3, double d4, double d5)
 {
-#if PLATFORM_CONSOLE_LOW
+#if PLATFORM_CONSOLE_LOW || PLATFORM_NSPIRE
 	using frustum_real_t = float;
 #else
 	using frustum_real_t = double;
@@ -51,7 +52,7 @@ bool ClippingHelper::isBoxInFrustum(double d, double d1, double d2, double d3, d
 // only the sign of the plane equation is read, never a distance.
 int ClippingHelper::classifyBox(double d, double d1, double d2, double d3, double d4, double d5)
 {
-#if PLATFORM_CONSOLE_LOW
+#if PLATFORM_CONSOLE_LOW || PLATFORM_NSPIRE
 	using frustum_real_t = float;
 #else
 	using frustum_real_t = double;

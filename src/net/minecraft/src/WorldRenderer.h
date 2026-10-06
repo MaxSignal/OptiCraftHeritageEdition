@@ -261,6 +261,11 @@ private:
 	// (ChunkCache::useDenseBlockIds) and reused by every step and pass of it.
 	std::vector<std::uint8_t> nspireDenseIds;
 	bool nspireDenseValid = false;
+public:
+	// Monotonic milliseconds of the last published build (RenderGlobal holds
+	// back light- and world-driven rebuilds of a section built moments ago).
+	std::uint32_t nspirePublishedMs = 0;
+private:
 #endif
 	// Snapshot of the ChunkCache source columns used by the staging mesh. If a
 	// streamed neighbour appears or disappears between incremental steps, the

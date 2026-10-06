@@ -4,6 +4,7 @@
 
 #include "nspire/NspireSystem.h"
 #include "nspire/render/NglBackend.h"
+#include "net/minecraft/src/World.h"
 
 // One status line in opticraft_log.txt.tns every few seconds: where the frame
 // time goes (ticks / world+GUI render / present), how many frames and ticks ran,
@@ -61,8 +62,14 @@ void frameEnd(long long frameNs, long long, long long, int ticksThisFrame, int c
     const double seconds = (now - g_windowStartNs) / 1e9;
     const auto ms = [&](long long ns) { return g_frames ? ns / 1e6 / g_frames : 0.0; };
     const NglBackend::Stats stats = NglBackend::takeStats();
+    // Time of day (0 dawn, 6000 noon, 12000 dusk, 18000 midnight) and how far
+    // the sky light is down (0 day .. 11 night), to tell nightfall from a
+    // rendering fault.
+    const long dayTime = world != nullptr ? static_cast<long>(world->getWorldTime() % 24000LL) : -1;
+    const int skyDown = world != nullptr ? static_cast<int>(world->skylightSubtracted) : -1;
     NspireSystem::log("[stat] t=%lus fps=%.2f frame=%.0fms(max %.0f) tick=%.0f light=%.0f render=%.0f present=%.0f "
-                      "ticks=%d chunkupd=%d draws=%lu tris=%lu/%lu skip=%lu world=%d heap=%luK peak=%luK fail=%u mesh=%luK tex=%luK\n",
+                      "ticks=%d chunkupd=%d draws=%lu tris=%lu/%lu skip=%lu world=%d heap=%luK peak=%luK fail=%u mesh=%luK tex=%luK "
+                      "daytime=%ld skydown=%d\n",
                       static_cast<unsigned long>(NspireSystem::micros() / 1000000u),
                       g_frames / seconds, ms(g_frameNs), g_worstFrameNs / 1e6, ms(g_tickNs), ms(g_lightingNs),
                       ms(g_renderNs), ms(g_displayNs), g_ticks, g_chunkUpdates,
@@ -71,7 +78,7 @@ void frameEnd(long long frameNs, long long, long long, int ticksThisFrame, int c
                       static_cast<unsigned long>(NspireSystem::heapPeakBytes() / 1024),
                       NspireSystem::heapFailures(),
                       static_cast<unsigned long>(NglBackend::meshBytes() / 1024),
-                      static_cast<unsigned long>(NglBackend::textureBytes() / 1024));
+                      static_cast<unsigned long>(NglBackend::textureBytes() / 1024), dayTime, skyDown);
 
     char phases[640];
     nspireProfileTakeTopPhases(phases, sizeof(phases), 20);

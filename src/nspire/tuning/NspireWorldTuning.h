@@ -264,6 +264,11 @@
 #define PLATFORM_PATHFIND_MAX_NODES              160
 #undef  PLATFORM_MOB_SPAWN_INTERVAL_TICKS
 #define PLATFORM_MOB_SPAWN_INTERVAL_TICKS        8
+// Spawn candidates come from the resident cache only (7 x 7 columns), not the
+// desktop's 17 x 17 square, most of which is never loaded here. The mob cap
+// above still binds long before the smaller eligible-chunk count does.
+#undef  PLATFORM_MOB_SPAWN_CHUNK_RADIUS
+#define PLATFORM_MOB_SPAWN_CHUNK_RADIUS          PLATFORM_CHUNK_CACHE_RADIUS
 // Spawn Y drawn within this band of the player instead of the whole column
 // (see PS2_MOB_SPAWN_Y_BAND): with the cap at 10, a mob spawned deep in a
 // cave the player never enters holds a slot for its whole life.
@@ -310,10 +315,17 @@
 
 // Entity-entity push resolution is only observable near the player; beyond
 // the render radius skip the chunk/AABB scan and keep everything else.
+// 16 (from 48), the AI far radius: entities past it are not drawn (12) and
+// barely think, so nobody sees whether they are pushed apart.
 #undef  PLATFORM_LIMIT_ENTITY_PUSH_COLLISIONS
 #define PLATFORM_LIMIT_ENTITY_PUSH_COLLISIONS    1
 #undef  PLATFORM_ENTITY_PUSH_COLLISION_RADIUS_BLOCKS
-#define PLATFORM_ENTITY_PUSH_COLLISION_RADIUS_BLOCKS 48.0f
+#define PLATFORM_ENTITY_PUSH_COLLISION_RADIUS_BLOCKS 16.0f
+
+// Sheep draw the wool layer (a second full model pass) only within 8 blocks;
+// see PS2_SHEEP_WOOL_LOD_DISTANCE_SQ.
+#undef  PLATFORM_SHEEP_WOOL_LOD_DISTANCE_SQ
+#define PLATFORM_SHEEP_WOOL_LOD_DISTANCE_SQ      64.0f
 
 // The Legacy PC / PS2 collision and entity-query fast paths. Same block
 // collision semantics; per-block virtual World/Chunk lookups become direct
@@ -328,6 +340,26 @@
 #define PLATFORM_EARLY_COLLISION_EXIT            1
 #undef  PLATFORM_ENTITY_QUERY_CACHE
 #define PLATFORM_ENTITY_QUERY_CACHE              1
+// More of the same, which the PS2 and Legacy PC had and this port missed:
+// - Each entity's "is the area around me loaded" box test is cached until the
+//   chunk set changes (World::updateEntityWithOptionalForce).
+// - Section block counts are recounted with one linear pass on chunk load.
+// - The line-of-sight path shortcut scan runs every 4th tick; path following
+//   itself still advances every tick.
+// - floor_double without the libgcc soft-double calls (exact; see
+//   IntegerFloorDouble.h). It is called for every entity and block lookup.
+// - A 4096-entry sine table (16 KB) instead of vanilla's 65536 (256 KB): the
+//   big table misses the 16 KB data cache on nearly every lookup.
+#undef  PLATFORM_CACHE_ENTITY_CHUNK_EXISTENCE
+#define PLATFORM_CACHE_ENTITY_CHUNK_EXISTENCE    1
+#undef  PLATFORM_FAST_BLOCK_COUNT_SCAN
+#define PLATFORM_FAST_BLOCK_COUNT_SCAN           1
+#undef  PLATFORM_PATH_SHORTCUT_TICK_DIVISOR
+#define PLATFORM_PATH_SHORTCUT_TICK_DIVISOR      4
+#undef  PLATFORM_INTEGER_FLOOR_DOUBLE
+#define PLATFORM_INTEGER_FLOOR_DOUBLE            1
+#undef  PLATFORM_SIN_TABLE_BITS
+#define PLATFORM_SIN_TABLE_BITS                  12
 // Sized for the unload-radius ceiling above (13 x 13), so the chunk maps never
 // rehash while the player crosses the edge of the SHORT working set.
 #undef  PLATFORM_CHUNK_MAP_RESERVE
@@ -383,6 +415,12 @@
 // source-column slices, ravines, structures, build, skylight) within a time
 // budget per tick, instead of in one ~200 ms call -- the device log's largest
 // single hitches while exploring.
+// The heightmap surface pass (ChunkProviderGenerateLite.cpp) instead of the
+// generic one, which drew a bedrock random for each of the 128 heights of all
+// 256 columns: a third of a chunk's generation on the host profile.
+#undef  PLATFORM_FAST_SURFACE_PASS
+#define PLATFORM_FAST_SURFACE_PASS               (NSPIRE_FAST_WORLDGEN && NSPIRE_USE_HEIGHTMAP_TERRAIN)
+
 #undef  PLATFORM_INCREMENTAL_CHUNK_GENERATION
 #define PLATFORM_INCREMENTAL_CHUNK_GENERATION    1
 #undef  PLATFORM_GENERATION_STEPS_PER_TICK

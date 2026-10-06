@@ -2385,10 +2385,23 @@ bool RenderGlobal::updateRenderers(EntityLiving *entityliving, bool flag)
 	meshBudget.maxUpdates = effectiveUpdateLimit;
 
 	rendererUpdateCandidates.clear();
+#if defined(NSPIRE_PLATFORM)
+	const std::uint32_t nspireNowMs = static_cast<std::uint32_t>(PlatformCompat::getMonotonicMicros() / 1000u);
+#endif
 	for (WorldRenderer *candidate : worldRenderersToUpdate)
 	{
 		if (candidate == nullptr || !candidate->needsUpdate)
 			continue;
+#if defined(NSPIRE_PLATFORM)
+		// A section that is drawn and was rebuilt under two seconds ago waits:
+		// light spreading, decoration and neighbours arriving re-mark sections
+		// several times over while the player explores, and each rebuild is a
+		// mesh step out of a frame. Its current mesh stays on screen meanwhile.
+		// The player's own edits (urgent) and holes are not held back.
+		if (!candidate->urgentRebuild && !candidate->isTerrainBuildInProgress() && candidate->hasPublishedTerrain() &&
+			nspireNowMs - candidate->nspirePublishedMs < 2000u)
+			continue;
+#endif
 #if PLATFORM_PS2
 		if ((flag || ps2MeshPressure) && !candidate->isInFrustum && !candidate->isTerrainBuildInProgress())
 			continue;

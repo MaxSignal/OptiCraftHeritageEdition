@@ -494,6 +494,9 @@ bool WorldRenderer::wiiBuildRendererStep(int_t blockBudget)
 	}
 
 	renderTerrainChunkHandlesPublish(terrainChunkHandles);
+#if defined(NSPIRE_PLATFORM)
+	nspirePublishedMs = static_cast<std::uint32_t>(PlatformCompat::getMonotonicMicros() / 1000u);
+#endif
 	for (int_t p = 0; p < 2; ++p)
 	{
 		extraTextureMeshes[p].swap(wiiBuildExtraTextureMeshes[p]);

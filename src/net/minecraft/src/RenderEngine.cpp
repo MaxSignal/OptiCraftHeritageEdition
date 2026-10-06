@@ -1634,14 +1634,16 @@ bool RenderEngine::updateStaticProceduralTextureFx(TextureFX *texturefx)
 
 	const int_t icon = texturefx->iconIndex;
 	const bool portal = Block::portal != nullptr && icon == Block::portal->blockIndexInTexture;
+	const bool fire = Block::fire != nullptr && (icon == Block::fire->blockIndexInTexture || icon == Block::fire->blockIndexInTexture + 16);
 #if PLATFORM_NSPIRE
 	// Animations default to off on the calculator: water and lava get one
-	// generated frame too, instead of the atlas's flat placeholder tile.
-	const bool fire = !portal;
+	// generated frame too, instead of the atlas's flat placeholder tile, from a
+	// short warm-up (the full 20 ticks for every effect was a 560 ms stall).
+	const int_t warmUpTicks = fire ? 20 : (portal ? 1 : 6);
 #else
-	const bool fire = Block::fire != nullptr && (icon == Block::fire->blockIndexInTexture || icon == Block::fire->blockIndexInTexture + 16);
 	if (!portal && !fire)
 		return false;
+	const int_t warmUpTicks = fire ? 20 : 1;
 #endif
 
 	const bool anaglyph = options != nullptr && options->anaglyph;
@@ -1651,15 +1653,8 @@ bool RenderEngine::updateStaticProceduralTextureFx(TextureFX *texturefx)
 	if (hasFrame && anaglyphIt != textureFxFrameAnaglyph.end() && anaglyphIt->second == anaglyph)
 		return true;
 
-	if (fire && !hasFrame)
-	{
-		for (int_t i = 0; i < 20; ++i)
-			texturefx->onTick();
-	}
-	else
-	{
+	for (int_t i = 0; i < (hasFrame ? 1 : warmUpTicks); ++i)
 		texturefx->onTick();
-	}
 	hasFrame = true;
 	textureFxFrameAnaglyph[texturefx] = anaglyph;
 	return true;
